@@ -1,105 +1,130 @@
 import React, { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Home, Trophy, Eye, Users, User, Target, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Bell, Search, User, LogOut, Settings } from 'lucide-react';
 
-function Sidebar() {
-    const [isCollapsed, setIsCollapsed] = useState(false);
-    const location = useLocation();
+function Navbar() {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [notifications, setNotifications] = useState(3); // Example count
+  const navigate = useNavigate();
+  
+  // Mock user - replace with actual auth context
+  const user = { username: 'Player123', avatar: null };
 
-    const menuItems = [
-        { icon: Home, label: 'Home', path: '/' },
-        { icon: Trophy, label: 'Tournaments', path: '/lobby' },
-        { icon: Eye, label: 'Spectate', path: '/spectate' },
-        { icon: Users, label: 'Friends', path: '/friends' },
-        { icon: User, label: 'Profile', path: '/profile/me' },
-        { icon: Target, label: 'Puzzles', path: '/puzzles' },
-        { icon: BookOpen, label: 'Learn', path: '/learn' },
-    ];
+  const handleSearch = (e) => {
+    e.preventDefault();
+    if (searchQuery.trim()) {
+      navigate(`/search?q=${searchQuery}`);
+    }
+  };
 
-    const isActive = (path) => location.pathname === path;
+  const handleLogout = () => {
+    // Add logout logic
+    navigate('/login');
+  };
 
-    return (
-        <aside
-            className={`${
-                isCollapsed ? 'w-20' : 'w-64'
-                } bg-black/20 backdrop-blur-md border-r border-white/10 min-h-[calc(100vh-4rem)] transition-all duration-300 relative`}
-            >
+  return (
+    <nav className="bg-black/30 backdrop-blur-md border-b border-white/10 sticky top-0 z-50">
+      <div className="container mx-auto px-4">
+        <div className="flex items-center justify-between h-16">
+          {/* Logo */}
+          <Link to="/" className="flex items-center space-x-2 text-white hover:text-purple-400 transition-colors">
+            <div className="text-2xl font-bold">♔</div>
+            <span className="text-xl font-bold">ChessHub</span>
+          </Link>
+          
+          {/* Navigation Links */}
+          <div className="hidden md:flex items-center space-x-6">
+            <Link to="/" className="text-white/80 hover:text-white transition-colors font-medium">
+              Play
+            </Link>
+            <Link to="/lobby" className="text-white/80 hover:text-white transition-colors font-medium">
+              Tournaments
+            </Link>
+            <Link to="/spectate" className="text-white/80 hover:text-white transition-colors font-medium">
+              Watch
+            </Link>
+            <Link to="/friends" className="text-white/80 hover:text-white transition-colors font-medium">
+              Friends
+            </Link>
+          </div>
 
-            {/* Collapse Toggle */}
-            <button
-                onClick={() => setIsCollapsed(!isCollapsed)}
-                className="absolute -right-3 top-6 bg-purple-600 hover:bg-purple-700 text-white rounded-full p-1 shadow-lg transition-colors z-10"
-            >
-                {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          {/* Search Bar */}
+          <form onSubmit={handleSearch} className="hidden md:block flex-1 max-w-md mx-6">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/40 w-4 h-4" />
+              <input
+                type="text"
+                placeholder="Search players, games..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              />
+            </div>
+          </form>
+
+          {/* Right Side - User Actions */}
+          <div className="flex items-center space-x-4">
+            {/* Notifications */}
+            <button className="relative p-2 text-white/80 hover:text-white transition-colors">
+              <Bell className="w-5 h-5" />
+              {notifications > 0 && (
+                <span className="absolute top-0 right-0 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  {notifications}
+                </span>
+              )}
             </button>
 
-            {/* Menu Items */}
-            <nav className="p-4 space-y-2">
-                {menuItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                    <Link
-                    key={item.path}
-                    to={item.path}
-                    className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-                        isActive(item.path)
-                        ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
-                        : 'text-white/70 hover:text-white hover:bg-white/10'
-                    }`}
-                    title={isCollapsed ? item.label : ''}
-                    >
-                    <Icon className="w-5 h-5 flex-shrink-0" />
-                    {!isCollapsed && <span className="font-medium">{item.label}</span>}
-                    </Link>
-                );
-                })}
-            </nav>
+            {/* User Menu */}
+            <div className="relative">
+              <button
+                onClick={() => setShowUserMenu(!showUserMenu)}
+                className="flex items-center space-x-2 p-2 rounded-lg hover:bg-white/10 transition-colors"
+              >
+                {user.avatar ? (
+                  <img src={user.avatar} alt={user.username} className="w-8 h-8 rounded-full" />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold">
+                    {user.username[0].toUpperCase()}
+                  </div>
+                )}
+                <span className="text-white font-medium hidden md:block">{user.username}</span>
+              </button>
 
-            {/* Online Friends Section */}
-            {!isCollapsed && (
-                <div className="px-4 py-6 border-t border-white/10">
-                <h3 className="text-white/60 text-xs font-semibold uppercase mb-3">Online Friends</h3>
-                <div className="space-y-2">
-                    {/* Mock friends - replace with real data */}
-                    {['GrandMaster99', 'ChessKing', 'PawnStorm'].map((friend, idx) => (
-                    <div key={idx} className="flex items-center space-x-2 px-2 py-2 rounded hover:bg-white/5 transition-colors cursor-pointer">
-                        <div className="relative">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center text-white text-xs font-bold">
-                            {friend[0]}
-                        </div>
-                        <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-400 rounded-full border-2 border-slate-900"></div>
-                        </div>
-                        <span className="text-white/80 text-sm">{friend}</span>
-                    </div>
-                    ))}
+              {/* Dropdown Menu */}
+              {showUserMenu && (
+                <div className="absolute right-0 mt-2 w-48 bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden">
+                  <Link
+                    to={`/profile/${user.username}`}
+                    className="flex items-center space-x-2 px-4 py-3 hover:bg-white/10 transition-colors text-white"
+                    onClick={() => setShowUserMenu(false)}
+                  >
+                    <User className="w-4 h-4" />
+                    <span>Profile</span>
+                  </Link>
+                  <Link
+                    to="/settings"
+                    className="flex items-center space-x-2 px-4 py-3 hover:bg-white/10 transition-colors text-white"
+                    onClick={() => setShowUserMenu(false)}
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span>Settings</span>
+                  </Link>
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center space-x-2 px-4 py-3 hover:bg-white/10 transition-colors text-red-400 border-t border-white/10"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Logout</span>
+                  </button>
                 </div>
-                </div>
-            )}
-
-            {/* Stats Section */}
-            {!isCollapsed && (
-                <div className="px-4 py-6 border-t border-white/10">
-                <h3 className="text-white/60 text-xs font-semibold uppercase mb-3">Your Stats</h3>
-                <div className="space-y-2 text-sm">
-                    <div className="flex justify-between text-white/70">
-                    <span>Rating</span>
-                    <span className="font-bold text-yellow-400">1450</span>
-                    </div>
-                    <div className="flex justify-between text-white/70">
-                    <span>Games</span>
-                    <span className="font-bold text-white">247</span>
-                    </div>
-                    <div className="flex justify-between text-white/70">
-                    <span>Win Rate</span>
-                    <span className="font-bold text-green-400">58%</span>
-                    </div>
-                </div>
-                </div>
-            )}
-
-        </aside>
-    );
-
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
 }
 
-export default Sidebar;
+export default Navbar;

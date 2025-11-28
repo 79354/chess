@@ -10,6 +10,8 @@ function Home() {
             <div className="grid lg:grid-cols-[1fr_320px] gap-6">
                 <div className="space-y-6">
                     <QuickPairingGrid />
+                    <HomeSidebar />
+                    <TournamentsList />
                 </div>
             </div>
         </div>
