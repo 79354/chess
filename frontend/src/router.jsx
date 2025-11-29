@@ -5,7 +5,7 @@ import Sidebar from './components/layout/Sidebar'
 import Footer from './components/layout/Footer'
 import Register from "./pages/Register";
 import Login from "./pages/Login"
-
+import NotFound from './pages/NotFound';
 import Home from './pages/Home'
 
 function AppRouter() {
@@ -19,6 +19,7 @@ function AppRouter() {
                         <Route path="/" element={<Home/>} />
                         <Route path="/register" element={<Register />} />
                         <Route path="/login" element={<Login />} />
+                        <Route path="*" element={<NotFound />} />
                     </Routes>
                 </main>
             </div>
