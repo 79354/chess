@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom';
 import Navbar from './components/layout/NavBar'
 import Sidebar from './components/layout/Sidebar'
 import Footer from './components/layout/Footer'
+import Register from "./pages/Register";
 
 import Home from './pages/Home'
 
@@ -15,6 +16,7 @@ function AppRouter() {
                 <main className="flex-1 p-6">
                     <Routes>
                         <Route path="/" element={<Home/>} />
+                        <Route path="/register" element={<Register />} />
                     </Routes>
                 </main>
             </div>
