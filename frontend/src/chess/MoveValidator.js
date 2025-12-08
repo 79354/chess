@@ -1,4 +1,3 @@
-// frontend/src/chess/MoveValidator.js
 class MoveValidator {
   constructor(board) {
     this.board = board;
