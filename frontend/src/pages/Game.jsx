@@ -36,7 +36,7 @@ function Game() {
   const [isSpectator, setIsSpectator] = useState(false);
 
   // Timers
-  const [whiteTime, setWhiteTime] = useState(300000); // 5 minutes in ms
+  const [whiteTime, setWhiteTime] = useState(300000);
   const [blackTime, setBlackTime] = useState(300000);
   const [timeIncrement, setTimeIncrement] = useState(0);
 
@@ -48,12 +48,18 @@ function Game() {
   // UI state
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [pendingMove, setPendingMove] = useState(null);
+  const [error, setError] = useState(null);
+  const [drawOfferPending, setDrawOfferPending] = useState(false);
+  const [takebackRequest, setTakebackRequest] = useState(false);
+
+  // Chat message handler
+  const [chatMessageHandler, setChatMessageHandler] = useState(null);
 
   // WebSocket connection
   const { isConnected, lastMessage, send } = useWebSocket(`/ws/game/${gameId}/`, {
     onOpen: () => {
-      // Request game state
-      send({ action: 'join_game' });
+      console.log('WebSocket connected, joining game...');
+      send({ type: 'join_game' });
     },
     onMessage: (data) => {
       handleWebSocketMessage(data);
@@ -61,6 +67,8 @@ function Game() {
   });
 
   const handleWebSocketMessage = useCallback((data) => {
+    console.log('WebSocket message received:', data.type);
+    
     switch (data.type) {
       case 'game_state':
         initializeGame(data);
@@ -70,30 +78,47 @@ function Game() {
         handleOpponentMove(data);
         break;
 
-      case 'time_update':
+      case 'clock_sync':
         setWhiteTime(data.white_time);
         setBlackTime(data.black_time);
+        break;
+
+      case 'state_snapshot':
+        applyStateSnapshot(data);
         break;
 
       case 'game_ended':
         handleGameEnd(data);
         break;
 
+      case 'chat_message':
+        // Pass to ChatBox component via callback
+        if (chatMessageHandler) {
+          chatMessageHandler(data);
+        }
+        break;
+
       case 'draw_offered':
-        // Show draw offer notification
+        setDrawOfferPending(true);
         break;
 
       case 'takeback_requested':
-        // Show takeback request notification
+        setTakebackRequest(true);
         break;
 
       case 'error':
         console.error('Game error:', data.message);
+        setError(data.message);
         break;
+        
+      default:
+        console.warn('Unknown message type:', data.type);
     }
-  }, [board, validator]);
+  }, [chatMessageHandler]);
 
   const initializeGame = (data) => {
+    console.log('Initializing game with data:', data);
+    
     // Set players
     setWhitePlayer(data.white_player);
     setBlackPlayer(data.black_player);
@@ -101,10 +126,13 @@ function Game() {
     // Determine player color
     if (user?.id === data.white_player?.id) {
       setPlayerColor('white');
+      setIsSpectator(false);
     } else if (user?.id === data.black_player?.id) {
       setPlayerColor('black');
+      setIsSpectator(false);
     } else {
       setIsSpectator(true);
+      setPlayerColor('white'); // Default view for spectators
     }
 
     // Load board from FEN
@@ -119,25 +147,37 @@ function Game() {
 
     // Load move history
     setMoves(data.moves || []);
-    setCurrentMoveIndex(data.moves?.length - 1 || -1);
+    setCurrentMoveIndex((data.moves?.length || 1) - 1);
 
     // Set game state
     setGameState({
       status: data.status,
-      turn: newBoard.turn,
+      turn: data.current_turn || newBoard.turn,
       check: data.check,
       winner: data.winner,
     });
   };
 
   const handleOpponentMove = (data) => {
-    // Update board
-    const newBoard = new Board(data.fen);
+    console.log('Opponent moved:', data.move);
+    
+    // Update board from server FEN (authoritative)
+    const newBoard = new Board(data.fen || data.move.fen);
     setBoard(newBoard);
     setValidator(new MoveValidator(newBoard));
 
     // Add move to history
-    setMoves(prev => [...prev, data.move]);
+    const moveData = {
+      from: data.move.from,
+      to: data.move.to,
+      piece: data.move.piece,
+      captured: data.move.captured,
+      notation: data.move.notation,
+      color: data.move.color,
+      timestamp: Date.now(),
+    };
+    
+    setMoves(prev => [...prev, moveData]);
     setCurrentMoveIndex(prev => prev + 1);
 
     // Update captured pieces
@@ -148,14 +188,23 @@ function Game() {
       }));
     }
 
+    // Update clock times if provided
+    if (data.white_time !== undefined) {
+      setWhiteTime(data.white_time);
+    }
+    if (data.black_time !== undefined) {
+      setBlackTime(data.black_time);
+    }
+
     // Update game state
-    const status = validator.getGameStatus();
-    setGameState({
-      status: status.status,
+    setGameState(prev => ({
+      ...prev,
+      status: data.move.status || prev.status,
       turn: newBoard.turn,
-      check: status.check,
-      winner: status.winner,
-    });
+      check: data.move.is_check ? newBoard.turn : null,
+      winner: data.move.winner || prev.winner,
+      lastMove: { from: data.move.from, to: data.move.to },
+    }));
   };
 
   const handleMove = (from, to) => {
@@ -190,17 +239,58 @@ function Game() {
   };
 
   const executeMove = (from, to, promotion) => {
+    // Client-side validation
     if (!validator.isValidMove(from, to, promotion)) {
-      console.log('Invalid move');
+      console.log('Invalid move (client validation)');
+      setError('Invalid move');
       return;
     }
 
-    // Send move to server
+    // Optimistic update (will be corrected by server if wrong)
+    const testBoard = board.clone();
+    const capturedPiece = testBoard.getPiece(to);
+    validator.makeMove(testBoard, from, to, promotion);
+    
+    setBoard(testBoard);
+    setValidator(new MoveValidator(testBoard));
+
+    // Send to server for authoritative validation
     send({
-      action: 'make_move',
-      from,
-      to,
-      promotion,
+      type: 'move',
+      payload: {
+        from,
+        to,
+        promotion,
+        timestamp: Date.now(),
+      },
+    });
+  };
+
+  const applyStateSnapshot = (data) => {
+    // Used when jumping to a specific move
+    const newBoard = new Board(data.fen);
+    setBoard(newBoard);
+    setValidator(new MoveValidator(newBoard));
+    
+    setWhiteTime(data.white_time);
+    setBlackTime(data.black_time);
+    setCurrentMoveIndex(data.move_index);
+    
+    setGameState(prev => ({
+      ...prev,
+      turn: newBoard.turn,
+      check: data.check,
+      lastMove: data.last_move,
+    }));
+  };
+
+  const handleMoveClick = (index) => {
+    // Request state snapshot at specific move from server
+    send({
+      type: 'jump_to_move',
+      payload: {
+        move_index: index,
+      },
     });
   };
 
@@ -214,29 +304,35 @@ function Game() {
   };
 
   const handleResign = () => {
-    send({ action: 'resign' });
+    send({ type: 'resign' });
   };
 
   const handleOfferDraw = () => {
-    send({ action: 'offer_draw' });
+    send({ type: 'offer_draw' });
   };
 
   const handleRequestTakeback = () => {
-    send({ action: 'request_takeback' });
+    send({ type: 'request_takeback' });
   };
 
   const getValidMoves = (square) => {
     return validator.getPieceMoves(square);
   };
 
-  const handleMoveClick = (index) => {
-    // Navigate through move history
-    setCurrentMoveIndex(index);
-    // TODO: Update board to show position at that move
+  const registerChatHandler = (handler) => {
+    setChatMessageHandler(() => handler);
   };
 
   return (
     <div className="container mx-auto max-w-7xl h-[calc(100vh-150px)]">
+      {/* Error Display */}
+      {error && (
+        <div className="fixed top-20 right-6 bg-red-500/90 text-white px-6 py-3 rounded-lg shadow-lg z-50">
+          {error}
+          <button onClick={() => setError(null)} className="ml-4 font-bold">×</button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-[350px_1fr_350px] gap-6 h-full">
         {/* Left Sidebar - Player Info & Controls */}
         <div className="space-y-6">
@@ -333,6 +429,8 @@ function Game() {
               gameId={gameId}
               isPlayerChat={!isSpectator}
               currentUser={user}
+              websocketSend={send}
+              onMessage={registerChatHandler}
             />
           </div>
         </div>
@@ -344,6 +442,31 @@ function Game() {
         color={playerColor}
         onSelect={handlePromotion}
       />
+
+      {/* Draw Offer Notification */}
+      {drawOfferPending && (
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white/95 rounded-xl p-6 shadow-2xl z-50">
+          <h3 className="text-xl font-bold text-gray-900 mb-4">Draw Offer</h3>
+          <p className="text-gray-700 mb-4">Your opponent offers a draw</p>
+          <div className="flex space-x-3">
+            <button
+              onClick={() => {
+                send({ type: 'accept_draw' });
+                setDrawOfferPending(false);
+              }}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg"
+            >
+              Accept
+            </button>
+            <button
+              onClick={() => setDrawOfferPending(false)}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg"
+            >
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
