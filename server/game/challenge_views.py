@@ -7,7 +7,7 @@ from django.utils import timezone
 from datetime import timedelta
 from django.contrib.auth import get_user_model
 from .models import GameChallenge, Game
-from .serializers import GameChallengeSerializer
+from .challenge_serializers import GameChallengeSerializer
 
 User = get_user_model()
 
