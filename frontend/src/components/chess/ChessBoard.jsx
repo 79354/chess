@@ -1,23 +1,16 @@
-import React, { useState, useEffect } from "react";
-import Square from "./Square";
-import Piece from "./Piece";
+import React, { useState, useEffect, useRef } from "react";
+import "../styles/Board.css"; // Import the CSS file
 
-function ChessBoard({
-  gameState,
-  onMove,
-  isSpectator,
-  playerColor,
-  getValidMoves,
-}) {
+function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves }) {
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [validMoves, setValidMoves] = useState([]);
   const [lastMove, setLastMove] = useState(null);
+  const [draggedPiece, setDraggedPiece] = useState(null);
+  const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
+  const boardRef = useRef(null);
 
   const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
-  const ranks =
-    playerColor === "black"
-      ? [1, 2, 3, 4, 5, 6, 7, 8]
-      : [8, 7, 6, 5, 4, 3, 2, 1];
+  const ranks = playerColor === "black" ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
 
   useEffect(() => {
     if (gameState?.lastMove) {
@@ -26,7 +19,7 @@ function ChessBoard({
   }, [gameState]);
 
   const handleSquareClick = (file, rank) => {
-    if (isSpectator) return;
+    if (isSpectator || gameState?.status !== 'ongoing') return;
 
     const square = `${file}${rank}`;
     const piece = gameState?.board?.[square];
@@ -45,16 +38,69 @@ function ChessBoard({
         setValidMoves([]);
       }
     } else {
-      if (
-        piece &&
-        piece.color === playerColor &&
-        gameState.turn === playerColor
-      ) {
+      if (piece && piece.color === playerColor && gameState.turn === playerColor) {
         setSelectedSquare(square);
         const moves = getValidMoves ? getValidMoves(square) : [];
         setValidMoves(moves);
       }
     }
+  };
+
+  // Drag handlers
+  const handleDragStart = (e, file, rank) => {
+    if (isSpectator || gameState?.status !== 'ongoing') {
+      e.preventDefault();
+      return;
+    }
+
+    const square = `${file}${rank}`;
+    const piece = gameState?.board?.[square];
+
+    if (!piece || piece.color !== playerColor || gameState.turn !== playerColor) {
+      e.preventDefault();
+      return;
+    }
+
+    const moves = getValidMoves ? getValidMoves(square) : [];
+    setDraggedPiece({ square, piece });
+    setValidMoves(moves);
+    setSelectedSquare(square);
+
+    // Create ghost image
+    const img = new Image();
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+    e.dataTransfer.setDragImage(img, 0, 0);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDrag = (e) => {
+    if (e.clientX === 0 && e.clientY === 0) return;
+    setDragPosition({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e, file, rank) => {
+    e.preventDefault();
+    if (!draggedPiece) return;
+
+    const toSquare = `${file}${rank}`;
+    if (validMoves.includes(toSquare)) {
+      onMove(draggedPiece.square, toSquare);
+    }
+
+    setDraggedPiece(null);
+    setSelectedSquare(null);
+    setValidMoves([]);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedPiece(null);
+    setSelectedSquare(null);
+    setValidMoves([]);
   };
 
   const getPieceAtSquare = (file, rank) => {
@@ -83,81 +129,127 @@ function ChessBoard({
     return piece?.type === "king" && gameState?.check === piece.color;
   };
 
+  const getPieceImage = (piece) => {
+    const colorCode = piece.color === 'white' ? 'w' : 'b';
+    const typeCode = piece.type[0];
+    return `https://images.chesscomfiles.com/chess-themes/pieces/neo/150/${colorCode}${typeCode}.png`;
+  };
+
   return (
-    <div className="relative w-full max-w-[600px] mx-auto">
-      {/* Professional board with coordinates */}
-      <div className="relative bg-[#312e2b] rounded-lg shadow-2xl p-2">
-        {/* Rank labels (left side) */}
-        <div className="absolute left-1 top-2 bottom-2 flex flex-col justify-around text-[#b58863] font-bold text-sm">
-          {ranks.map((rank) => (
-            <div key={rank} className="h-[12.5%] flex items-center">
-              {rank}
-            </div>
-          ))}
-        </div>
-
-        {/* File labels (bottom) */}
-        <div className="absolute bottom-1 left-8 right-8 flex justify-around text-[#b58863] font-bold text-sm">
-          {files.map((file) => (
-            <div key={file} className="w-[12.5%] text-center">
-              {file}
-            </div>
-          ))}
-        </div>
-
-        {/* Chess Board */}
-        <div className="grid grid-cols-8 gap-0 ml-6 mr-2 mb-6 mt-2 aspect-square border-2 border-[#1a1714]">
-          {ranks.map((rank) =>
-            files.map((file, fileIndex) => {
-              const isLight = (ranks.indexOf(rank) + fileIndex) % 2 === 0;
+    <div className="chess-board-container" ref={boardRef}>
+      <div className="chess-board-wrapper">
+        <div className="chess-board">
+          {ranks.map((rank, rankIdx) =>
+            files.map((file, fileIdx) => {
+              const isLight = (rankIdx + fileIdx) % 2 === 0;
               const piece = getPieceAtSquare(file, rank);
+              const square = `${file}${rank}`;
+              const isDragging = draggedPiece?.square === square;
+              const hasPieceOnValidMove = isSquareHighlighted(file, rank) && piece;
 
               return (
-                <Square
-                  key={`${file}${rank}`}
-                  isLight={isLight}
-                  isSelected={isSquareSelected(file, rank)}
-                  isHighlighted={isSquareHighlighted(file, rank)}
-                  isLastMove={isSquareLastMove(file, rank)}
-                  isCheck={isSquareInCheck(file, rank)}
+                <div
+                  key={square}
+                  className={`
+                    chess-square
+                    ${isLight ? 'light' : 'dark'}
+                    ${isSquareSelected(file, rank) ? 'selected' : ''}
+                    ${hasPieceOnValidMove ? 'valid-capture' : ''}
+                    ${isSquareHighlighted(file, rank) && !piece ? 'valid-move' : ''}
+                    ${isSquareLastMove(file, rank) ? 'last-move' : ''}
+                    ${isSquareInCheck(file, rank) ? 'in-check' : ''}
+                    ${isSpectator ? 'disabled' : ''}
+                  `}
                   onClick={() => handleSquareClick(file, rank)}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, file, rank)}
                 >
-                  {piece && (
-                    <Piece
-                      type={piece.type}
-                      color={piece.color}
-                      isDraggable={
-                        !isSpectator &&
-                        piece.color === playerColor &&
-                        gameState.turn === playerColor
-                      }
-                    />
+                  {piece && !isDragging && (
+                    <div
+                      className="chess-piece"
+                      draggable={!isSpectator && piece.color === playerColor && gameState.turn === playerColor}
+                      onDragStart={(e) => handleDragStart(e, file, rank)}
+                      onDrag={handleDrag}
+                      onDragEnd={handleDragEnd}
+                    >
+                      <img src={getPieceImage(piece)} alt={`${piece.color} ${piece.type}`} />
+                    </div>
                   )}
-                </Square>
+
+                  {/* Coordinate labels */}
+                  {fileIdx === 0 && <span className="rank-label">{rank}</span>}
+                  {rankIdx === ranks.length - 1 && <span className="file-label">{file}</span>}
+                </div>
               );
             })
           )}
         </div>
-      </div>
 
-      {/* Game Status Overlay */}
-      {gameState?.status && gameState.status !== "ongoing" && (
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm rounded-lg flex items-center justify-center z-20">
-          <div className="bg-white/95 rounded-xl p-8 text-center shadow-2xl">
-            <h2 className="text-3xl font-bold text-gray-900 mb-2">
-              {gameState.status === "checkmate" && "Checkmate!"}
-              {gameState.status === "stalemate" && "Stalemate!"}
-              {gameState.status === "draw" && "Draw!"}
-              {gameState.status === "resignation" && "Game Over"}
-            </h2>
-            <p className="text-gray-700 text-lg">
-              {gameState.winner
-                ? `${gameState.winner === "white" ? "White" : "Black"} wins!`
-                : "Game ended in a draw"}
-            </p>
+        {/* Dragged piece ghost */}
+        {draggedPiece && dragPosition.x > 0 && (
+          <div
+            style={{
+              position: 'fixed',
+              left: dragPosition.x - 40,
+              top: dragPosition.y - 40,
+              width: 80,
+              height: 80,
+              pointerEvents: 'none',
+              zIndex: 1000,
+              opacity: 0.8,
+            }}
+          >
+            <img
+              src={getPieceImage(draggedPiece.piece)}
+              alt="dragging"
+              style={{ width: '100%', height: '100%' }}
+            />
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Game Status Overlay */}
+        {gameState?.status && gameState.status !== "ongoing" && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            backdropFilter: 'blur(4px)',
+            borderRadius: '0.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 20
+          }}>
+            <div style={{
+              backgroundColor: 'rgba(255, 255, 255, 0.95)',
+              borderRadius: '0.75rem',
+              padding: '2rem',
+              textAlign: 'center',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+            }}>
+              <h2 style={{
+                fontSize: '1.875rem',
+                fontWeight: 'bold',
+                color: '#111827',
+                marginBottom: '0.5rem'
+              }}>
+                {gameState.status === "checkmate" && "Checkmate!"}
+                {gameState.status === "stalemate" && "Stalemate!"}
+                {gameState.status === "draw" && "Draw!"}
+                {gameState.status === "resignation" && "Game Over"}
+              </h2>
+              <p style={{
+                color: '#374151',
+                fontSize: '1.125rem'
+              }}>
+                {gameState.winner
+                  ? `${gameState.winner === "white" ? "White" : "Black"} wins!`
+                  : "Game ended in a draw"}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
