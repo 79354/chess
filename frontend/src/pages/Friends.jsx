@@ -15,38 +15,19 @@ function Friends() {
     fetchFriendRequests();
   }, []);
 
+    
   const fetchFriends = async () => {
     try {
-      // TODO: Replace with actual API endpoint
-      // const response = await api.get('/friends');
+      const response = await api.get('/auth/friends/');
       
-      // Mock data
-      setFriends([
-        {
-          id: 1,
-          username: 'GrandMaster99',
-          rating: 1850,
-          isOnline: true,
-          lastSeen: new Date(),
-          avatar: null,
-        },
-        {
-          id: 2,
-          username: 'ChessKing',
-          rating: 1620,
-          isOnline: true,
-          lastSeen: new Date(),
-          avatar: null,
-        },
-        {
-          id: 3,
-          username: 'PawnStorm',
-          rating: 1450,
-          isOnline: false,
-          lastSeen: new Date(Date.now() - 3600000),
-          avatar: null,
-        },
-      ]);
+      setFriends(response.map(f => ({
+        id: f.friend.id,
+        username: f.friend.username,
+        rating: f.friend.rating,
+        isOnline: f.friend.is_online,
+        lastSeen: new Date(f.friend.last_seen),
+        avatar: f.friend.avatar,
+      })));
     } catch (error) {
       console.error('Failed to fetch friends:', error);
     }
@@ -54,18 +35,14 @@ function Friends() {
 
   const fetchFriendRequests = async () => {
     try {
-      // TODO: Replace with actual API endpoint
-      // const response = await api.get('/friends/requests');
+      const response = await api.get('/auth/friends/requests/');
       
-      // Mock data
-      setFriendRequests([
-        {
-          id: 1,
-          username: 'RookMaster',
-          rating: 1550,
-          sentAt: new Date(Date.now() - 7200000),
-        },
-      ]);
+      setFriendRequests(response.map(r => ({
+        id: r.id,
+        username: r.from_user.username,
+        rating: r.from_user.rating,
+        sentAt: new Date(r.created_at),
+      })));
     } catch (error) {
       console.error('Failed to fetch friend requests:', error);
     }
@@ -80,14 +57,8 @@ function Friends() {
 
     setLoading(true);
     try {
-      // TODO: Replace with actual API endpoint
-      // const response = await api.get('/users/search', { params: { q: query } });
-      
-      // Mock data
-      setSearchResults([
-        { id: 4, username: 'QueenGambit', rating: 1720, isFriend: false },
-        { id: 5, username: 'KnightRider', rating: 1580, isFriend: false },
-      ]);
+      const response = await api.get('/auth/users/search/', { params: { q: query } });
+      setSearchResults(response);
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
@@ -95,11 +66,12 @@ function Friends() {
     }
   };
 
-  const handleAddFriend = async (userId) => {
+  const handleAddFriend = async (username) => {
     try {
-      // TODO: Replace with actual API endpoint
-      // await api.post('/friends/request', { user_id: userId });
-      console.log('Friend request sent to:', userId);
+      await api.post('/auth/friends/request/', { username });
+      console.log('Friend request sent to:', username);
+      // Refresh search to update is_friend status
+      handleSearch(searchQuery);
     } catch (error) {
       console.error('Failed to send friend request:', error);
     }
@@ -107,8 +79,7 @@ function Friends() {
 
   const handleAcceptRequest = async (requestId) => {
     try {
-      // TODO: Replace with actual API endpoint
-      // await api.post('/friends/accept', { request_id: requestId });
+      await api.post('/auth/friends/accept/', { request_id: requestId });
       setFriendRequests(prev => prev.filter(r => r.id !== requestId));
       fetchFriends();
     } catch (error) {
@@ -118,14 +89,13 @@ function Friends() {
 
   const handleRejectRequest = async (requestId) => {
     try {
-      // TODO: Replace with actual API endpoint
-      // await api.post('/friends/reject', { request_id: requestId });
+      await api.post('/auth/friends/reject/', { request_id: requestId });
       setFriendRequests(prev => prev.filter(r => r.id !== requestId));
     } catch (error) {
       console.error('Failed to reject friend request:', error);
     }
   };
-
+  
   const getLastSeenText = (lastSeen) => {
     const diff = Date.now() - lastSeen.getTime();
     const minutes = Math.floor(diff / 60000);

@@ -117,3 +117,26 @@ class MatchmakingQueue(models.Model):
         
     def __str__(self):
         return f"{self.user.username} - {self.time_control}"
+
+
+class GameChallenge(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('expired', 'Expired'),
+    ]
+    
+    challenger = models.ForeignKey(User, on_delete=models.CASCADE, related_name='challenges_sent')
+    challenged = models.ForeignKey(User, on_delete=models.CASCADE, related_name='challenges_received')
+    time_control = models.CharField(max_length=10)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    game = models.ForeignKey(Game, on_delete=models.SET_NULL, null=True, blank=True, related_name='challenge')
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()  # Auto-reject after 2 minutes
+    
+    class Meta:
+        db_table = 'game_challenges'
+        
+    def __str__(self):
+        return f"{self.challenger.username} -> {self.challenged.username}"
