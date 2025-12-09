@@ -1,6 +1,7 @@
 import  {React, useState} from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, User, UserPlus } from 'lucide-react';
+import api from '../services/api'
 
 function Register() {
   const [formData, setFormData] = useState({
@@ -48,28 +49,24 @@ function Register() {
     setErrors({});
 
     try {
-      // TODO: Replace with actual API call
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: formData.username,
-          email: formData.email,
-          password: formData.password,
-        }),
-      });
+      const data = await api.post('/auth/register/', {
+        username: formData.username,
+        email: formData.email,
+        password: formData.password,
+        password2: formData.confirmPassword,
+      }, { auth: false });
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.message || 'Registration failed');
-      }
-
-      const data = await response.json();
+      // Save token and user
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
+      
+      // Navigate to home
       navigate('/');
     } catch (err) {
-      setErrors({ submit: err.message || 'Registration failed. Please try again.' });
+      console.error('Registration error:', err);
+      setErrors({ 
+        submit: err.message || 'Registration failed. Please try again.' 
+      });
     } finally {
       setLoading(false);
     }

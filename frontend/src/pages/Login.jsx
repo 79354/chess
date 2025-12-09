@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, LogIn } from 'lucide-react';
+import api from '../services/api';
 
 function Login() {
   const [formData, setFormData] = useState({ email: '', password: '' });
@@ -15,21 +16,18 @@ function Login() {
     setLoading(true);
 
     try {
-      // TODO: Replace with actual API call
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
+      const data = await api.post('/auth/login/', {
+        email: formData.email,
+        password: formData.password,
+      }, { auth: false });
 
-      if (!response.ok) throw new Error('Invalid credentials');
-
-      const data = await response.json();
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
+      
       navigate('/');
     } catch (err) {
-      setError(err.message || 'Login failed. Please try again.');
+      console.error('Login error:', err);
+      setError(err.message || 'Login failed. Please check your credentials.');
     } finally {
       setLoading(false);
     }

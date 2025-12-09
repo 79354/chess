@@ -17,27 +17,22 @@ User = get_user_model()
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
-    """Register a new user and send verification email"""
+    """Register a new user"""
     serializer = RegisterSerializer(data=request.data)
     
     if serializer.is_valid():
         user = serializer.save()
         
-        # Send verification email
-        verification_url = f"{settings.SITE_URL}/verify-email/{user.email_verification_token}"
-        send_mail(
-            'Verify your ChessHub account',
-            f'Click this link to verify your email: {verification_url}',
-            settings.DEFAULT_FROM_EMAIL,
-            [user.email],
-            fail_silently=False,
-        )
+        # Auto-verify in development (no email sent)
+        user.is_email_verified = True
+        user.email_verification_token = None
+        user.save()
         
         # Generate tokens
         refresh = RefreshToken.for_user(user)
         
         return Response({
-            'message': 'Registration successful. Please check your email to verify your account.',
+            'message': 'Registration successful.',
             'user': UserSerializer(user).data,
             'token': str(refresh.access_token),
             'refresh': str(refresh),
