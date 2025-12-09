@@ -1,25 +1,37 @@
 import React, { useState, useEffect } from 'react';
-import { Search, UserPlus, MessageCircle, Swords, Users, Clock } from 'lucide-react';
+import { Search, UserPlus, MessageCircle, Swords, Users, Bell } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import ChallengeModal from '../components/social/ChallengeModal';
+import ChallengeNotification from '../components/social/ChallengeNotification';
 
 function Friends() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('friends');
   const [friends, setFriends] = useState([]);
   const [friendRequests, setFriendRequests] = useState([]);
+  const [challenges, setChallenges] = useState({ received: [], sent: [] });
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  
+  // Challenge modal state
+  const [showChallengeModal, setShowChallengeModal] = useState(false);
+  const [selectedFriend, setSelectedFriend] = useState(null);
 
   useEffect(() => {
     fetchFriends();
     fetchFriendRequests();
+    fetchChallenges();
+    
+    // Poll for challenges every 5 seconds
+    const interval = setInterval(fetchChallenges, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-    
   const fetchFriends = async () => {
     try {
       const response = await api.get('/auth/friends/');
-      
       setFriends(response.map(f => ({
         id: f.friend.id,
         username: f.friend.username,
@@ -36,7 +48,6 @@ function Friends() {
   const fetchFriendRequests = async () => {
     try {
       const response = await api.get('/auth/friends/requests/');
-      
       setFriendRequests(response.map(r => ({
         id: r.id,
         username: r.from_user.username,
@@ -45,6 +56,15 @@ function Friends() {
       })));
     } catch (error) {
       console.error('Failed to fetch friend requests:', error);
+    }
+  };
+
+  const fetchChallenges = async () => {
+    try {
+      const response = await api.get('/game/challenges/');
+      setChallenges(response);
+    } catch (error) {
+      console.error('Failed to fetch challenges:', error);
     }
   };
 
@@ -69,8 +89,6 @@ function Friends() {
   const handleAddFriend = async (username) => {
     try {
       await api.post('/auth/friends/request/', { username });
-      console.log('Friend request sent to:', username);
-      // Refresh search to update is_friend status
       handleSearch(searchQuery);
     } catch (error) {
       console.error('Failed to send friend request:', error);
@@ -95,6 +113,44 @@ function Friends() {
       console.error('Failed to reject friend request:', error);
     }
   };
+
+  const handleChallengeFriend = (friend) => {
+    setSelectedFriend(friend);
+    setShowChallengeModal(true);
+  };
+
+  const handleSendChallenge = async (friendId, timeControl) => {
+    try {
+      await api.post('/game/challenges/send/', {
+        friend_id: friendId,
+        time_control: timeControl
+      });
+      fetchChallenges();
+      alert('Challenge sent!');
+    } catch (error) {
+      console.error('Failed to send challenge:', error);
+      alert(error.message || 'Failed to send challenge');
+    }
+  };
+
+  const handleAcceptChallenge = async (challengeId) => {
+    try {
+      const response = await api.post(`/game/challenges/${challengeId}/accept/`);
+      navigate(`/game/${response.game_id}`);
+    } catch (error) {
+      console.error('Failed to accept challenge:', error);
+      alert(error.message || 'Failed to accept challenge');
+    }
+  };
+
+  const handleRejectChallenge = async (challengeId) => {
+    try {
+      await api.post(`/game/challenges/${challengeId}/reject/`);
+      fetchChallenges();
+    } catch (error) {
+      console.error('Failed to reject challenge:', error);
+    }
+  };
   
   const getLastSeenText = (lastSeen) => {
     const diff = Date.now() - lastSeen.getTime();
@@ -112,10 +168,34 @@ function Friends() {
 
   return (
     <div className="container mx-auto max-w-6xl">
+      {/* Challenge Notifications */}
+      {challenges.received.length > 0 && (
+        <div className="fixed top-20 right-6 z-50 space-y-3 max-w-sm">
+          {challenges.received.map((challenge) => (
+            <ChallengeNotification
+              key={challenge.id}
+              challenge={challenge}
+              onAccept={handleAcceptChallenge}
+              onReject={handleRejectChallenge}
+            />
+          ))}
+        </div>
+      )}
+
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-4xl font-bold text-white mb-2">Friends</h1>
-        <p className="text-white/60">Connect with chess players and challenge your friends</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-4xl font-bold text-white mb-2">Friends</h1>
+            <p className="text-white/60">Connect with chess players and challenge your friends</p>
+          </div>
+          {challenges.received.length > 0 && (
+            <div className="flex items-center space-x-2 bg-purple-600/20 border border-purple-500/50 rounded-lg px-4 py-2">
+              <Bell className="w-5 h-5 text-purple-400 animate-pulse" />
+              <span className="text-white font-semibold">{challenges.received.length} challenge(s)</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -197,10 +277,17 @@ function Friends() {
                     </div>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <button className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+                    <button 
+                      className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                      title="Message"
+                    >
                       <MessageCircle className="w-5 h-5" />
                     </button>
-                    <button className="p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+                    <button 
+                      onClick={() => handleChallengeFriend(friend)}
+                      className="p-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white rounded-lg transition-all"
+                      title="Challenge to game"
+                    >
                       <Swords className="w-5 h-5" />
                     </button>
                   </div>
@@ -298,11 +385,11 @@ function Friends() {
                     </div>
                     <button
                       onClick={() => handleAddFriend(user.id)}
-                      disabled={user.isFriend}
+                      disabled={user.is_friend}
                       className="flex items-center space-x-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-white/10 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                     >
                       <UserPlus className="w-4 h-4" />
-                      <span>{user.isFriend ? 'Already Friends' : 'Add Friend'}</span>
+                      <span>{user.is_friend ? 'Already Friends' : 'Add Friend'}</span>
                     </button>
                   </div>
                 ))}
@@ -311,6 +398,17 @@ function Friends() {
           </div>
         )}
       </div>
+
+      {/* Challenge Modal */}
+      <ChallengeModal
+        isOpen={showChallengeModal}
+        onClose={() => {
+          setShowChallengeModal(false);
+          setSelectedFriend(null);
+        }}
+        friend={selectedFriend}
+        onSendChallenge={handleSendChallenge}
+      />
     </div>
   );
 }

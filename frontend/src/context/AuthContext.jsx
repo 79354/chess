@@ -23,8 +23,15 @@ export function AuthProvider({ children }) {
     const storedUser = localStorage.getItem('user');
 
     if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        setToken(storedToken);
+        setUser(parsedUser);
+      } catch (error) {
+        console.error('Failed to parse stored user:', error);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
     }
 
     setLoading(false);
@@ -32,7 +39,7 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetch('http://localhost:8000/api/auth/login/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -40,7 +47,7 @@ export function AuthProvider({ children }) {
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.message || 'Login failed');
+        throw new Error(error.error || 'Login failed');
       }
 
       const data = await response.json();
@@ -51,6 +58,11 @@ export function AuthProvider({ children }) {
       setToken(data.token);
       setUser(data.user);
       
+      // Navigate to home after successful login
+      setTimeout(() => {
+        navigate('/', { replace: true });
+      }, 100);
+      
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -59,10 +71,10 @@ export function AuthProvider({ children }) {
 
   const register = async (username, email, password) => {
     try {
-      const response = await fetch('/api/auth/register', {
+      const response = await fetch('http://localhost:8000/api/auth/register/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password }),
+        body: JSON.stringify({ username, email, password, password2: password }),
       });
 
       if (!response.ok) {
@@ -78,6 +90,11 @@ export function AuthProvider({ children }) {
       setToken(data.token);
       setUser(data.user);
       
+      // Navigate to home after successful registration
+      setTimeout(() => {
+        navigate('/', { replace: true });
+      }, 100);
+      
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -89,7 +106,7 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('user');
     setToken(null);
     setUser(null);
-    navigate('/login');
+    navigate('/login', { replace: true });
   };
 
   const updateUser = (updates) => {

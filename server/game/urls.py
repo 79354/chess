@@ -10,8 +10,8 @@ urlpatterns = [
 
     # Challenge endpoints
     path('challenges/send/', challenge_views.send_challenge, name='send_challenge'),
-    path('challenges/accept/', challenge_views.accept_challenge, name='accept_challenge'),
-    path('challenges/reject/', challenge_views.reject_challenge, name='reject_challenge'),
     path('challenges/pending/', challenge_views.get_challenges, name='pending_challenges'),
+    path('challenges/accept/<int:challenge_id>/', challenge_views.accept_challenge, name='accept_challenge'),
+    path('challenges/reject/<int:challenge_id>/', challenge_views.reject_challenge, name='reject_challenge'),
     path('challenges/<int:challenge_id>/cancel/', challenge_views.cancel_challenge, name='cancel_challenge'),
 ]

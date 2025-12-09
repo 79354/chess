@@ -1,7 +1,7 @@
-import  {React, useState} from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, User, UserPlus } from 'lucide-react';
-import api from '../services/api'
+import { useAuth } from '../context/AuthContext';
 
 function Register() {
   const [formData, setFormData] = useState({
@@ -16,6 +16,14 @@ function Register() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const navigate = useNavigate();
+  const { register, isAuthenticated } = useAuth();
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const validateForm = () => {
     const newErrors = {};
@@ -40,7 +48,7 @@ function Register() {
     return Object.keys(newErrors).length === 0;
   };
 
-    const handleSubmit = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
     if (!validateForm()) return;
@@ -49,23 +57,18 @@ function Register() {
     setErrors({});
 
     try {
-      const data = await api.post('/auth/register/', {
-        username: formData.username,
-        email: formData.email,
-        password: formData.password,
-        password2: formData.confirmPassword,
-      }, { auth: false });
-
-      // Save token and user
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      const result = await register(formData.username, formData.email, formData.password);
       
-      // Navigate to home
-      navigate('/');
+      if (!result.success) {
+        setErrors({ 
+          submit: result.error || 'Registration failed. Please try again.' 
+        });
+      }
+      // Navigation is handled in AuthContext after successful registration
     } catch (err) {
       console.error('Registration error:', err);
       setErrors({ 
-        submit: err.message || 'Registration failed. Please try again.' 
+        submit: 'An unexpected error occurred. Please try again.' 
       });
     } finally {
       setLoading(false);
@@ -107,6 +110,7 @@ function Register() {
                   className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-3 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   placeholder="chessmaster123"
                   required
+                  disabled={loading}
                 />
               </div>
               {errors.username && (
@@ -128,6 +132,7 @@ function Register() {
                   className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-3 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   placeholder="your@email.com"
                   required
+                  disabled={loading}
                 />
               </div>
               {errors.email && (
@@ -149,11 +154,13 @@ function Register() {
                   className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-12 py-3 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   placeholder="••••••••"
                   required
+                  disabled={loading}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-white/40 hover:text-white/60"
+                  disabled={loading}
                 >
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -177,11 +184,13 @@ function Register() {
                   className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-12 py-3 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   placeholder="••••••••"
                   required
+                  disabled={loading}
                 />
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-white/40 hover:text-white/60"
+                  disabled={loading}
                 >
                   {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -198,6 +207,7 @@ function Register() {
                 id="terms"
                 className="mt-1 w-4 h-4 rounded border-white/20 bg-white/10 text-purple-600 focus:ring-purple-500"
                 required
+                disabled={loading}
               />
               <label htmlFor="terms" className="ml-2 text-white/60 text-sm">
                 I agree to the{' '}
