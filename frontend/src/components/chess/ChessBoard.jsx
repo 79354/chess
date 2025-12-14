@@ -18,6 +18,23 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     }
   }, [gameState]);
 
+  // FIXED: Proper piece image mapping
+  const getPieceImage = (piece) => {
+    const colorCode = piece.color === 'white' ? 'w' : 'b';
+    
+    const pieceCodeMap = {
+      'pawn': 'p',
+      'knight': 'n',
+      'bishop': 'b',
+      'rook': 'r',
+      'queen': 'q',
+      'king': 'k'
+    };
+    
+    const typeCode = pieceCodeMap[piece.type] || piece.type[0];
+    return `https://images.chesscomfiles.com/chess-themes/pieces/neo/150/${colorCode}${typeCode}.png`;
+  };
+
   const handleSquareClick = (file, rank) => {
     if (isSpectator || gameState?.status !== 'ongoing') return;
 
@@ -26,14 +43,17 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
 
     if (selectedSquare) {
       if (validMoves.includes(square)) {
+        // Execute move
         onMove(selectedSquare, square);
         setSelectedSquare(null);
         setValidMoves([]);
       } else if (piece && piece.color === playerColor) {
+        // Select different piece
         setSelectedSquare(square);
         const moves = getValidMoves ? getValidMoves(square) : [];
         setValidMoves(moves);
       } else {
+        // Deselect
         setSelectedSquare(null);
         setValidMoves([]);
       }
@@ -46,7 +66,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     }
   };
 
-  // Drag handlers
+  // FIXED: Complete drag & drop implementation
   const handleDragStart = (e, file, rank) => {
     if (isSpectator || gameState?.status !== 'ongoing') {
       e.preventDefault();
@@ -66,7 +86,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     setValidMoves(moves);
     setSelectedSquare(square);
 
-    // Create ghost image
+    // Hide default drag image
     const img = new Image();
     img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
     e.dataTransfer.setDragImage(img, 0, 0);
@@ -74,7 +94,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
   };
 
   const handleDrag = (e) => {
-    if (e.clientX === 0 && e.clientY === 0) return;
+    if (e.clientX === 0 && e.clientY === 0) return; // Ignore end event
     setDragPosition({ x: e.clientX, y: e.clientY });
   };
 
@@ -129,12 +149,6 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     return piece?.type === "king" && gameState?.check === piece.color;
   };
 
-  const getPieceImage = (piece) => {
-    const colorCode = piece.color === 'white' ? 'w' : 'b';
-    const typeCode = piece.type[0];
-    return `https://images.chesscomfiles.com/chess-themes/pieces/neo/150/${colorCode}${typeCode}.png`;
-  };
-
   return (
     <div className="chess-board-container" ref={boardRef}>
       <div className="chess-board-wrapper">
@@ -185,7 +199,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
           )}
         </div>
 
-        {/* Dragged piece ghost */}
+        {/* FIXED: Dragged piece ghost */}
         {draggedPiece && dragPosition.x > 0 && (
           <div
             style={{

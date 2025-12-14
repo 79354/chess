@@ -18,6 +18,7 @@ function Game() {
   const { gameId } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [connectionError, setConnectionError] = useState(null);
 
   // Game state
   const [board, setBoard] = useState(new Board());
@@ -52,14 +53,25 @@ function Game() {
   const [chatMessageHandler, setChatMessageHandler] = useState(null);
 
   // WebSocket connection
-  const { isConnected, lastMessage, send } = useWebSocket(`/ws/game/${gameId}/`, {
+  const { isConnected, lastMessage, send, error: wsError } = useWebSocket(`/ws/game/${gameId}/`, {
     onOpen: () => {
       console.log('WebSocket connected, joining game...');
+      setConnectionError(null);
       send({ type: 'join_game' });
     },
     onMessage: (data) => {
       handleWebSocketMessage(data);
     },
+    onError: (err) => {
+      console.error('WebSocket error:', err);
+      setConnectionError('Connection failed. Please check your internet.');
+    },
+    onClose: (event) => {
+      if (event.code === 1008 || event.code === 4001) {
+        setConnectionError('Session expired. Please login again.');
+        setTimeout(() => navigate('/login'), 3000);
+      }
+    }
   });
 
   const handleWebSocketMessage = useCallback((data) => {
@@ -181,7 +193,7 @@ function Game() {
   };
 
   const executeMove = (from, to, promotion) => {
-    // ✅ OPTIMISTIC UPDATE - Show move immediately for instant feedback
+    // OPTIMISTIC UPDATE - Show move immediately for instant feedback
     const tempBoard = board.clone();
     const piece = tempBoard.getPiece(from);
     
@@ -232,68 +244,68 @@ function Game() {
     });
   };
 
-  const handleOpponentMove = useCallback((data) => {
-    console.log('Move event received:', data);
+const handleOpponentMove = useCallback((data) => {
+  console.log('Move event received:', data);
+  
+  const moveData = data.move;
+  
+  if (!moveData) {
+    console.error('No move data in event:', data);
+    return;
+  }
+  
+  // CRITICAL: Update board from FEN (authoritative)
+  if (moveData.fen) {
+    const newBoard = new Board(moveData.fen);
+    setBoard(newBoard);
+    setValidator(new MoveValidator(newBoard));
+  }
+  
+  // Remove optimistic moves and add confirmed move
+  setMoves(prev => {
+    const confirmed = prev.filter(m => !m.optimistic);
     
-    const moveData = data.move;
+    const serverMove = {
+      from: moveData.from,
+      to: moveData.to,
+      piece: moveData.piece,
+      captured: moveData.captured,
+      notation: moveData.notation,
+      color: moveData.color,
+      timestamp: moveData.timestamp || Date.now(),
+      sequence: moveData.sequence,
+    };
     
-    if (!moveData) {
-      console.error('No move data in event:', data);
-      return;
-    }
-    
-    // ✅ Remove optimistic move and replace with confirmed move
-    setMoves(prev => {
-      // Filter out optimistic moves
-      const confirmed = prev.filter(m => !m.optimistic);
-      
-      // Add server-confirmed move
-      const serverMove = {
-        from: moveData.from,
-        to: moveData.to,
-        piece: moveData.piece,
-        captured: moveData.captured,
-        notation: moveData.notation,
-        color: moveData.color,
-        timestamp: moveData.timestamp || Date.now(),
-        sequence: moveData.sequence,
-      };
-      
-      return [...confirmed, serverMove];
-    });
-    
-    // Update board from server (authoritative)
-    // Note: In a real implementation, you'd get the FEN from the move event
-    // For now, we trust our optimistic update was correct
-    // But you should reconstruct from FEN if available: data.fen
-    
-    setCurrentMoveIndex(prev => {
-      // Count only confirmed moves
-      const confirmedCount = moves.filter(m => !m.optimistic).length;
-      return confirmedCount;
-    });
+    return [...confirmed, serverMove];
+  });
+  
+  setCurrentMoveIndex(prev => {
+    const confirmedCount = moves.filter(m => !m.optimistic).length;
+    return confirmedCount;
+  });
 
-    // Update captured pieces (already done optimistically, but confirm)
-    // No action needed if optimistic was correct
-
-    // Update clock times (authoritative from server)
-    if (data.white_time !== undefined) {
-      setWhiteTime(data.white_time);
-    }
-    if (data.black_time !== undefined) {
-      setBlackTime(data.black_time);
-    }
-
-    // Update game state
-    setGameState(prev => ({
+  // Update captured pieces
+  if (moveData.captured) {
+    setCapturedPieces(prev => ({
       ...prev,
-      status: moveData.status || prev.status,
-      turn: board.turn, // Already switched in optimistic update
-      check: moveData.is_check ? board.turn : null,
-      winner: moveData.winner || prev.winner,
-      lastMove: { from: moveData.from, to: moveData.to },
+      [moveData.color]: [...prev[moveData.color], moveData.captured],
     }));
-  }, [board, moves]);
+  }
+
+  // Update clock times
+  if (data.white_time !== undefined) setWhiteTime(data.white_time);
+  if (data.black_time !== undefined) setBlackTime(data.black_time);
+
+  // Update game state
+  setGameState(prev => ({
+    ...prev,
+    status: moveData.status || prev.status,
+    turn: board.turn,
+    check: moveData.is_check ? board.turn : null,
+    winner: moveData.winner || prev.winner,
+    lastMove: { from: moveData.from, to: moveData.to },
+  }));
+}, [board, moves]);
 
   const rollbackOptimisticMove = () => {
     // Remove last optimistic move and restore board state
@@ -362,11 +374,47 @@ function Game() {
 
   return (
     <div className="container mx-auto max-w-7xl h-[calc(100vh-150px)]">
+      {(connectionError || wsError) && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 max-w-md w-full mx-4">
+          <div className="bg-red-500/90 backdrop-blur-sm text-white px-6 py-4 rounded-lg shadow-2xl border-2 border-red-600">
+            <div className="flex items-center space-x-3">
+              <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"/>
+              </svg>
+              <div className="flex-1">
+                <p className="font-semibold">Connection Error</p>
+                <p className="text-sm text-white/90">{connectionError || wsError}</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setConnectionError(null);
+                  window.location.reload();
+                }}
+                className="text-white/80 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Error Display */}
       {error && (
         <div className="fixed top-20 right-6 bg-red-500/90 text-white px-6 py-3 rounded-lg shadow-lg z-50">
           {error}
           <button onClick={() => setError(null)} className="ml-4 font-bold">×</button>
+        </div>
+      )}
+
+      {!isConnected && !connectionError && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50">
+          <div className="bg-yellow-500/90 backdrop-blur-sm text-white px-6 py-3 rounded-lg shadow-xl flex items-center space-x-3">
+            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            <span className="font-medium">Reconnecting to game...</span>
+          </div>
         </div>
       )}
 

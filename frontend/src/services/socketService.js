@@ -9,6 +9,7 @@ function useWebSocket(url, options = {}) {
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
+  const tokenValidatedRef = useRef(false);
 
   const {
     onMessage,
@@ -17,21 +18,32 @@ function useWebSocket(url, options = {}) {
     onError,
     reconnect = true,
     reconnectInterval = 3000,
-    maxReconnectAttempts = 5,
+    maxReconnectAttempts = 3,
   } = options;
 
   const connect = useCallback(() => {
     try {
       const token = localStorage.getItem('token');
-      const wsUrl = token ? `${WS_BASE_URL}${url}?token=${token}` : `${WS_BASE_URL}${url}`;
       
+      // NEW: Validate token exists
+      if (!token) {
+        console.error('No authentication token found');
+        setError('Authentication required');
+        setIsConnected(false);
+        return;
+      }
+      
+      const wsUrl = `${WS_BASE_URL}${url}?token=${token}`;
+      
+      console.log(`WebSocket connecting (attempt ${reconnectAttemptsRef.current + 1}/${maxReconnectAttempts})...`);
       wsRef.current = new WebSocket(wsUrl);
 
       wsRef.current.onopen = (event) => {
-        console.log('WebSocket connected');
+        console.log('✅ WebSocket connected');
         setIsConnected(true);
         setError(null);
         reconnectAttemptsRef.current = 0;
+        tokenValidatedRef.current = true;
         onOpen?.(event);
       };
 
@@ -46,28 +58,37 @@ function useWebSocket(url, options = {}) {
       };
 
       wsRef.current.onerror = (event) => {
-        console.error('WebSocket error:', event);
-        setError('WebSocket connection error');
+        console.error('❌ WebSocket error:', event);
+        setError('Connection error');
         onError?.(event);
       };
 
       wsRef.current.onclose = (event) => {
-        console.log('WebSocket disconnected');
+        console.log('WebSocket disconnected', event.code, event.reason);
         setIsConnected(false);
         onClose?.(event);
 
-        // Attempt to reconnect
+        // NEW: Check if it's an auth error (code 1008 = policy violation)
+        if (event.code === 1008 || event.code === 4001) {
+          console.error('❌ Authentication failed - token invalid');
+          setError('Session expired. Please login again.');
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          // Don't attempt reconnection on auth failure
+          return;
+        }
+
+        // Attempt to reconnect (with limit)
         if (reconnect && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current += 1;
-          console.log(
-            `Attempting to reconnect (${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`
-          );
+          console.log(`⏳ Reconnecting in ${reconnectInterval/1000}s...`);
           
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
           }, reconnectInterval);
         } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-          setError('Max reconnection attempts reached');
+          console.error('❌ Max reconnection attempts reached');
+          setError('Unable to connect. Please refresh the page.');
         }
       };
     } catch (err) {
@@ -92,7 +113,8 @@ function useWebSocket(url, options = {}) {
       const message = typeof data === 'string' ? data : JSON.stringify(data);
       wsRef.current.send(message);
     } else {
-      console.error('WebSocket is not connected');
+      console.error('❌ WebSocket is not connected');
+      setError('Not connected to server');
     }
   }, []);
 
