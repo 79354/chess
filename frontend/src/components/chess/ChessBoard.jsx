@@ -9,31 +9,20 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
   const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
   const boardRef = useRef(null);
 
-  const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
-  const ranks = playerColor === "black" ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  // FIX: Flip BOTH files AND ranks for black
+  const files = playerColor === "black" 
+    ? ["h", "g", "f", "e", "d", "c", "b", "a"]  // Black sees h→a (reversed)
+    : ["a", "b", "c", "d", "e", "f", "g", "h"]; // White sees a→h (normal)
+  
+  const ranks = playerColor === "black" 
+    ? [1, 2, 3, 4, 5, 6, 7, 8]  // Black sees 1→8 (from bottom to top)
+    : [8, 7, 6, 5, 4, 3, 2, 1]; // White sees 8→1 (from top to bottom)
 
   useEffect(() => {
     if (gameState?.lastMove) {
       setLastMove(gameState.lastMove);
     }
   }, [gameState]);
-
-  // FIXED: Proper piece image mapping
-  const getPieceImage = (piece) => {
-    const colorCode = piece.color === 'white' ? 'w' : 'b';
-    
-    const pieceCodeMap = {
-      'pawn': 'p',
-      'knight': 'n',
-      'bishop': 'b',
-      'rook': 'r',
-      'queen': 'q',
-      'king': 'k'
-    };
-    
-    const typeCode = pieceCodeMap[piece.type] || piece.type[0];
-    return `https://images.chesscomfiles.com/chess-themes/pieces/neo/150/${colorCode}${typeCode}.png`;
-  };
 
   const handleSquareClick = (file, rank) => {
     if (isSpectator || gameState?.status !== 'ongoing') return;
@@ -43,17 +32,14 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
 
     if (selectedSquare) {
       if (validMoves.includes(square)) {
-        // Execute move
         onMove(selectedSquare, square);
         setSelectedSquare(null);
         setValidMoves([]);
       } else if (piece && piece.color === playerColor) {
-        // Select different piece
         setSelectedSquare(square);
         const moves = getValidMoves ? getValidMoves(square) : [];
         setValidMoves(moves);
       } else {
-        // Deselect
         setSelectedSquare(null);
         setValidMoves([]);
       }
@@ -66,7 +52,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     }
   };
 
-  // FIXED: Complete drag & drop implementation
+  // Drag handlers
   const handleDragStart = (e, file, rank) => {
     if (isSpectator || gameState?.status !== 'ongoing') {
       e.preventDefault();
@@ -86,7 +72,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     setValidMoves(moves);
     setSelectedSquare(square);
 
-    // Hide default drag image
+    // Create ghost image
     const img = new Image();
     img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
     e.dataTransfer.setDragImage(img, 0, 0);
@@ -94,7 +80,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
   };
 
   const handleDrag = (e) => {
-    if (e.clientX === 0 && e.clientY === 0) return; // Ignore end event
+    if (e.clientX === 0 && e.clientY === 0) return;
     setDragPosition({ x: e.clientX, y: e.clientY });
   };
 
@@ -149,6 +135,12 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     return piece?.type === "king" && gameState?.check === piece.color;
   };
 
+  const getPieceImage = (piece) => {
+    const colorCode = piece.color === 'white' ? 'w' : 'b';
+    const typeCode = piece.type[0];
+    return `https://images.chesscomfiles.com/chess-themes/pieces/neo/150/${colorCode}${typeCode}.png`;
+  };
+
   return (
     <div className="chess-board-container" ref={boardRef}>
       <div className="chess-board-wrapper">
@@ -185,8 +177,18 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
                       onDragStart={(e) => handleDragStart(e, file, rank)}
                       onDrag={handleDrag}
                       onDragEnd={handleDragEnd}
+                      style={{ 
+                        cursor: (!isSpectator && piece.color === playerColor && gameState.turn === playerColor) 
+                          ? 'grab' 
+                          : 'default' 
+                      }}
                     >
-                      <img src={getPieceImage(piece)} alt={`${piece.color} ${piece.type}`} />
+                      <img 
+                        src={getPieceImage(piece)} 
+                        alt={`${piece.color} ${piece.type}`}
+                        draggable={false}
+                        style={{ pointerEvents: 'none' }}
+                      />
                     </div>
                   )}
 
@@ -199,23 +201,23 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
           )}
         </div>
 
-        {/* FIXED: Dragged piece ghost */}
-        {draggedPiece && dragPosition.x > 0 && (
+        {/* Dragging Piece Preview - follows cursor */}
+        {draggedPiece && (
           <div
             style={{
               position: 'fixed',
               left: dragPosition.x - 40,
               top: dragPosition.y - 40,
-              width: 80,
-              height: 80,
+              width: '80px',
+              height: '80px',
               pointerEvents: 'none',
               zIndex: 1000,
-              opacity: 0.8,
+              opacity: 0.8
             }}
           >
             <img
               src={getPieceImage(draggedPiece.piece)}
-              alt="dragging"
+              alt={`${draggedPiece.piece.color} ${draggedPiece.piece.type}`}
               style={{ width: '100%', height: '100%' }}
             />
           </div>

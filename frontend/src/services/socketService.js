@@ -68,24 +68,31 @@ function useWebSocket(url, options = {}) {
         setIsConnected(false);
         onClose?.(event);
 
-        // NEW: Check if it's an auth error (code 1008 = policy violation)
+        // CRITICAL: Stop reconnection on authentication failures
         if (event.code === 1008 || event.code === 4001) {
-          console.error('❌ Authentication failed - token invalid');
+          console.error('❌ Authentication failed - stopping reconnection');
           setError('Session expired. Please login again.');
           localStorage.removeItem('token');
           localStorage.removeItem('user');
-          // Don't attempt reconnection on auth failure
+          reconnectAttemptsRef.current = maxReconnectAttempts; // Prevent further attempts
           return;
         }
 
-        // Attempt to reconnect (with limit)
+        // Stop reconnection if manually disconnected
+        if (event.code === 1000) {
+          console.log('Clean disconnect - no reconnection needed');
+          return;
+        }
+
+        // Attempt reconnect with exponential backoff
         if (reconnect && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current += 1;
-          console.log(`⏳ Reconnecting in ${reconnectInterval/1000}s...`);
+          const backoffDelay = reconnectInterval * Math.pow(1.5, reconnectAttemptsRef.current - 1);
+          console.log(`⏳ Reconnecting in ${backoffDelay/1000}s (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`);
           
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
-          }, reconnectInterval);
+          }, backoffDelay);
         } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
           console.error('❌ Max reconnection attempts reached');
           setError('Unable to connect. Please refresh the page.');

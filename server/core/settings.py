@@ -1,7 +1,3 @@
-"""
-Django settings for core project.
-"""
-
 from pathlib import Path
 from datetime import timedelta
 import os
@@ -20,6 +16,9 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 # Application definition
 INSTALLED_APPS = [
     'daphne',  # Must be first for channels
+    'corsheaders',
+    'channels',
+
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -31,8 +30,6 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
-    'corsheaders',
-    'channels',
     
     # Local apps
     'accounts',

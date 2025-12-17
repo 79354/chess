@@ -53,25 +53,37 @@ function Game() {
   const [chatMessageHandler, setChatMessageHandler] = useState(null);
 
   // WebSocket connection
-  const { isConnected, lastMessage, send, error: wsError } = useWebSocket(`/ws/game/${gameId}/`, {
-    onOpen: () => {
-      console.log('WebSocket connected, joining game...');
-      setConnectionError(null);
-      send({ type: 'join_game' });
-    },
-    onMessage: (data) => {
-      handleWebSocketMessage(data);
-    },
-    onError: (err) => {
-      console.error('WebSocket error:', err);
-      setConnectionError('Connection failed. Please check your internet.');
-    },
-    onClose: (event) => {
-      if (event.code === 1008 || event.code === 4001) {
-        setConnectionError('Session expired. Please login again.');
-        setTimeout(() => navigate('/login'), 3000);
-      }
+  const handleOpen = useCallback(() => {
+    console.log('✅ WebSocket connected');
+    setConnectionError(null);
+    send({ type: 'join_game' });
+  }, []); // Empty deps - send is stable from the hook
+
+  const handleMessage = useCallback((data) => {
+    handleWebSocketMessage(data);
+  }, [handleWebSocketMessage]);
+
+  const handleError = useCallback((err) => {
+    console.error('WebSocket error:', err);
+    setConnectionError('Connection failed. Please check your internet.');
+  }, []);
+
+  const handleClose = useCallback((event) => {
+    console.log('WebSocket closed', event.code);
+    if (event.code === 1008 || event.code === 4001) {
+      setConnectionError('Session expired. Please login again.');
+      setTimeout(() => navigate('/login'), 3000);
     }
+  }, [navigate]);
+
+  const { isConnected, lastMessage, send, error: wsError } = useWebSocket(`/ws/game/${gameId}/`, {
+    onOpen: handleOpen,
+    onMessage: handleMessage,
+    onError: handleError,
+    onClose: handleClose,
+    reconnect: true,
+    reconnectInterval: 3000,
+    maxReconnectAttempts: 3,
   });
 
   const handleWebSocketMessage = useCallback((data) => {
@@ -100,26 +112,21 @@ function Game() {
         break;
 
       case 'chat_message':
-        if (chatMessageHandler) {
-          chatMessageHandler(data);
-        }
+        // Handle chat directly without separate handler
+        console.log('Chat message:', data);
         break;
 
       case 'error':
         console.error('Game error:', data.message);
         setError(data.message);
-        // Rollback optimistic update on error
-        if (moves.length > 0 && moves[moves.length - 1].optimistic) {
-          rollbackOptimisticMove();
-        }
         break;
         
       default:
         console.warn('Unknown message type:', data.type);
     }
-  }, [chatMessageHandler, moves]);
+  }, []);
 
-  const initializeGame = (data) => {
+  const initializeGame = useCallback((data) => {
     console.log('Initializing game with data:', data);
     
     // Set players
@@ -159,7 +166,7 @@ function Game() {
       check: data.check,
       winner: data.winner,
     });
-  };
+  }, [user?.id])
 
   const handleMove = (from, to) => {
     if (isSpectator) return;
@@ -326,7 +333,7 @@ const handleOpponentMove = useCallback((data) => {
     });
   };
 
-  const applyStateSnapshot = (data) => {
+  const applyStateSnapshot = useCallback((data) => {
     const newBoard = new Board(data.fen);
     setBoard(newBoard);
     setValidator(new MoveValidator(newBoard));
@@ -341,16 +348,16 @@ const handleOpponentMove = useCallback((data) => {
       check: data.check,
       lastMove: data.last_move,
     }));
-  };
+  }, []);
 
-  const handleGameEnd = (data) => {
-    setGameState({
+  const handleGameEnd = useCallback((data) => {
+    setGameState(prev => ({
+      ...prev,
       status: data.status,
-      turn: board.turn,
       winner: data.winner,
       reason: data.reason,
-    });
-  };
+    }));
+  }, []);
 
   const handleResign = () => {
     send({ type: 'resign' });
@@ -368,9 +375,13 @@ const handleOpponentMove = useCallback((data) => {
     return validator.getPieceMoves(square);
   };
 
-  const registerChatHandler = (handler) => {
-    setChatMessageHandler(() => handler);
-  };
+  useEffect(() => {
+    return () => {
+      if (send) {
+        send({ type: 'disconnect' });
+      }
+    };
+  }, [send]);
 
   return (
     <div className="container mx-auto max-w-7xl h-[calc(100vh-150px)]">
@@ -496,7 +507,7 @@ const handleOpponentMove = useCallback((data) => {
               isPlayerChat={!isSpectator}
               currentUser={user}
               websocketSend={send}
-              onMessage={registerChatHandler}
+              onMessage={null}
             />
           </div>
         </div>
