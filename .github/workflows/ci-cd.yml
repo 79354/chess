@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 env:
   AWS_REGION: us-east-1
   ECR_BACKEND_REPOSITORY: chess-backend
