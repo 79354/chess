@@ -36,8 +36,8 @@ services:
 
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
+      context: ./server
+      dockerfile: Dockerfile
     container_name: chess_backend
     environment:
       - DEBUG=False
@@ -58,6 +58,8 @@ services:
     networks:
       - chess_network
     restart: unless-stopped
+    expose:
+      - "8000"
     command: >
       sh -c "python manage.py migrate &&
              python manage.py collectstatic --noinput &&
@@ -65,8 +67,8 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: chess_frontend
     ports:
       - "80:80"
