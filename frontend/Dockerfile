@@ -1,39 +1,38 @@
-# -------------------------------
-# Stage 1 — Build the Vite project
-# -------------------------------
-FROM node:20-alpine AS builder
+# Multi-stage build for React frontend
 
+# Stage 1: Build
+FROM node:18-alpine AS builder
+
+# Set working directory
 WORKDIR /app
 
-# Install dependencies first (cached if package.json doesn't change)
-COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
-RUN \
-  if [ -f package-lock.json ]; then npm install; \
-  elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm && pnpm install; \
-  elif [ -f yarn.lock ]; then yarn install; \
-  else npm install; \
-  fi
+# Copy package files
+COPY package*.json ./
 
-# Copy rest of project
+# Install dependencies with legacy peer deps to avoid conflicts
+RUN npm ci --legacy-peer-deps
+
+# Copy source code
 COPY . .
 
-# Build production bundle
+# Build the application
 RUN npm run build
 
+# Stage 2: Production
+FROM nginx:alpine
 
-# ----------------------------------
-# Stage 2 — Serve with Nginx (static)
-# ----------------------------------
-FROM nginx:stable-alpine AS production
+# Copy custom nginx config if you have one
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Remove default nginx static files
-RUN rm -rf /usr/share/nginx/html/*
-
-# Copy built assets from previous stage
+# Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Expose port 80
 EXPOSE 80
 
-# Start Nginx
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
+
+# Start nginx
 CMD ["nginx", "-g", "daemon off;"]
