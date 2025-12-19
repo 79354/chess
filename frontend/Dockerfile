@@ -1,7 +1,6 @@
 # Multi-stage build for React frontend
-
 # Stage 1: Build
-FROM node:18-alpine AS builder
+FROM node:18 AS builder
 
 # Set working directory
 WORKDIR /app
@@ -9,7 +8,7 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies with legacy peer deps to avoid conflicts
+# Install dependencies
 RUN npm ci --legacy-peer-deps
 
 # Copy source code
@@ -21,7 +20,7 @@ RUN npm run build
 # Stage 2: Production
 FROM nginx:alpine
 
-# Copy custom nginx config if you have one
+# Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy built assets from builder stage
