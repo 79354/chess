@@ -20,14 +20,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
-COPY server/pyproject.toml server/uv.lock* ./
+COPY pyproject.toml uv.lock* ./
 
 # Install Python dependencies
 RUN pip install uv && \
     uv pip install --system -r pyproject.toml
 
 # Copy project files
-COPY server/ .
+COPY . .
 
 # Create necessary directories
 RUN mkdir -p /app/staticfiles /app/media
