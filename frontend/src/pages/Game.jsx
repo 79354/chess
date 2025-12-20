@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import useWebSocket from '../services/socketService';
+import { Handshake, Loader2 } from 'lucide-react';
 
 import ChessBoard from '../components/chess/ChessBoard';
 import GameClock from '../components/chess/GameClock';
@@ -13,14 +14,13 @@ import PromotionModal from '../components/chess/PromotionModal';
 
 import Board from '../chess/Board';
 import MoveValidator from '../chess/MoveValidator';
-import { Handshake } from 'lucide-react';
 
 function Game() {
   const { gameId } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // Game state
+  // Core game state
   const [board, setBoard] = useState(new Board());
   const [validator, setValidator] = useState(new MoveValidator(board));
   const [gameState, setGameState] = useState({
@@ -28,6 +28,7 @@ function Game() {
     turn: 'white',
     check: null,
     winner: null,
+    lastMove: null,
   });
 
   // Player info
@@ -36,36 +37,45 @@ function Game() {
   const [playerColor, setPlayerColor] = useState(null);
   const [isSpectator, setIsSpectator] = useState(false);
 
-  // Timers
+  // Clock state - in milliseconds
   const [whiteTime, setWhiteTime] = useState(300000);
   const [blackTime, setBlackTime] = useState(300000);
   const [timeIncrement, setTimeIncrement] = useState(0);
 
-  // Move history
+  // Move history and UI
   const [moves, setMoves] = useState([]);
   const [currentMoveIndex, setCurrentMoveIndex] = useState(-1);
   const [capturedPieces, setCapturedPieces] = useState({ white: [], black: [] });
-
-  // UI state
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [pendingMove, setPendingMove] = useState(null);
-  const [error, setError] = useState(null);
-  const [connectionError, setConnectionError] = useState(null);
-  const [chatMessageHandler, setChatMessageHandler] = useState(null);
-
   const [drawOffer, setDrawOffer] = useState(null);
   const [showDrawOfferModal, setShowDrawOfferModal] = useState(false);
+  
+  // UI feedback
+  const [error, setError] = useState(null);
+  const [connectionError, setConnectionError] = useState(null);
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  // Ref to store the send function
-  const sendRef = useRef(null);
+  // Chat handler
+  const [chatMessageHandler, setChatMessageHandler] = useState(null);
 
-  // HANDLER FUNCTIONS
-  const initializeGame = useCallback((data) => {
-    console.log('Initializing game with data:', data);
+  // Update validator when board changes
+  useEffect(() => {
+    setValidator(new MoveValidator(board));
+  }, [board]);
+
+  // =================================================================
+  // WEBSOCKET MESSAGE HANDLERS
+  // =================================================================
+
+  const handleGameState = useCallback((data) => {
+    console.log('🎮 Initializing game state:', data);
     
+    // Set players
     setWhitePlayer(data.white_player);
     setBlackPlayer(data.black_player);
 
+    // Determine player color
     if (user?.id === data.white_player?.id) {
       setPlayerColor('white');
       setIsSpectator(false);
@@ -74,42 +84,69 @@ function Game() {
       setIsSpectator(false);
     } else {
       setIsSpectator(true);
-      setPlayerColor('white');
+      setPlayerColor('white'); // spectators see from white's perspective
     }
 
-    const newBoard = new Board(data.fen);
+    // Load board from FEN
+    const newBoard = new Board(data.fen || data.current_fen);
     setBoard(newBoard);
-    setValidator(new MoveValidator(newBoard));
 
-    setWhiteTime(data.white_time);
-    setBlackTime(data.black_time);
-    setTimeIncrement(data.increment);
+    // Set clocks
+    setWhiteTime(data.white_time || data.white_time_left);
+    setBlackTime(data.black_time || data.black_time_left);
+    setTimeIncrement(data.increment || 0);
 
-    setMoves(data.moves || []);
-    setCurrentMoveIndex((data.moves?.length || 1) - 1);
+    // Load moves history (SERVER FORMAT)
+    const serverMoves = (data.moves || []).map(m => ({
+      from: m.from,
+      to: m.to,
+      piece: m.piece,
+      captured: m.captured,
+      notation: m.notation || m.algebraic_notation,
+      color: m.color,
+      timestamp: m.timestamp || Date.now(),
+      sequence: m.sequence || m.move_number,
+    }));
+    
+    setMoves(serverMoves);
+    setCurrentMoveIndex(serverMoves.length - 1);
 
+    // Calculate captured pieces from moves
+    const whiteCaptured = [];
+    const blackCaptured = [];
+    serverMoves.forEach(move => {
+      if (move.captured) {
+        if (move.color === 'white') {
+          whiteCaptured.push(move.captured);
+        } else {
+          blackCaptured.push(move.captured);
+        }
+      }
+    });
+    setCapturedPieces({ white: whiteCaptured, black: blackCaptured });
+
+    // Set game state
     setGameState({
       status: data.status,
       turn: data.current_turn || newBoard.turn,
       check: data.check,
       winner: data.winner,
+      lastMove: serverMoves.length > 0 ? serverMoves[serverMoves.length - 1] : null,
     });
+
+    setIsInitialized(true);
   }, [user]);
 
   const handleOpponentMove = useCallback((data) => {
-    console.log('Move event received:', data);
+    console.log('♟️ Move received:', data);
     
     const moveData = data.move;
+    if (!moveData) return;
     
-    if (!moveData) {
-      console.error('No move data in event:', data);
-      return;
-    }
-    
+    // 1. Remove optimistic moves, add confirmed server move
     setMoves(prev => {
       const confirmed = prev.filter(m => !m.optimistic);
-      
-      const serverMove = {
+      return [...confirmed, {
         from: moveData.from,
         to: moveData.to,
         piece: moveData.piece,
@@ -118,40 +155,50 @@ function Game() {
         color: moveData.color,
         timestamp: moveData.timestamp || Date.now(),
         sequence: moveData.sequence,
-      };
-      
-      return [...confirmed, serverMove];
+      }];
     });
     
-    if (data.fen) {
-      const newBoard = new Board(data.fen);
+    // 2. Update board from server FEN
+    if (data.fen || moveData.fen) {
+      const newBoard = new Board(data.fen || moveData.fen);
       setBoard(newBoard);
-      setValidator(new MoveValidator(newBoard));
     }
     
-    setCurrentMoveIndex(prev => prev + 1);
-
-    if (data.white_time !== undefined) {
-      setWhiteTime(data.white_time);
+    // 3. Update clocks FROM SERVER
+    if (data.white_time !== undefined) setWhiteTime(data.white_time);
+    if (data.black_time !== undefined) setBlackTime(data.black_time);
+    
+    // 4. Update captured pieces
+    if (moveData.captured) {
+      setCapturedPieces(prev => ({
+        ...prev,
+        [moveData.color]: [...prev[moveData.color], moveData.captured],
+      }));
     }
-    if (data.black_time !== undefined) {
-      setBlackTime(data.black_time);
-    }
-
+    
+    // 5. Update game state
     setGameState(prev => ({
       ...prev,
-      status: moveData.status || prev.status,
-      turn: moveData.next_turn || (prev.turn === 'white' ? 'black' : 'white'),
-      check: moveData.is_check ? moveData.next_turn : null,
-      winner: moveData.winner || prev.winner,
+      status: moveData.status || data.status || prev.status,
+      turn: prev.turn === 'white' ? 'black' : 'white',
+      check: moveData.is_check ? (prev.turn === 'white' ? 'black' : 'white') : null,
       lastMove: { from: moveData.from, to: moveData.to },
+      winner: moveData.winner || data.winner || prev.winner,
     }));
+    
+    setCurrentMoveIndex(prev => prev + 1);
   }, []);
 
-  const applyStateSnapshot = useCallback((data) => {
+  const handleClockSync = useCallback((data) => {
+    // Backend sends clock updates every second
+    setWhiteTime(data.white_time);
+    setBlackTime(data.black_time);
+  }, []);
+
+  const handleStateSnapshot = useCallback((data) => {
+    // When jumping to a specific move
     const newBoard = new Board(data.fen);
     setBoard(newBoard);
-    setValidator(new MoveValidator(newBoard));
     
     setWhiteTime(data.white_time);
     setBlackTime(data.black_time);
@@ -165,146 +212,151 @@ function Game() {
     }));
   }, []);
 
-  const handleGameEnd = useCallback((data) => {
+  const handleGameEnded = useCallback((data) => {
+    console.log('🏁 Game ended:', data);
+    
     setGameState(prev => ({
       ...prev,
       status: data.status,
       winner: data.winner,
-      reason: data.reason || data.termination,
+      termination: data.reason || data.termination,
     }));
 
+    // Show rating changes if available
     if (data.rating_changes) {
-      console.log('Rating changes:', data.rating_changes);
+      console.log('📊 Rating changes:', data.rating_changes);
     }
   }, []);
 
-  // WebSocket message handler
+  const handleDrawOffer = useCallback((data) => {
+    setDrawOffer({
+      from: data.offer_from,
+      username: data.username,
+    });
+    setShowDrawOfferModal(true);
+  }, []);
+
+  const handleDrawDeclined = useCallback(() => {
+    setDrawOffer(null);
+    setShowDrawOfferModal(false);
+    setError('Draw offer was declined');
+    setTimeout(() => setError(null), 3000);
+  }, []);
+
   const handleWebSocketMessage = useCallback((data) => {
-    console.log('WebSocket message received:', data.type);
+    console.log('📨 WebSocket message:', data.type);
     
     switch (data.type) {
       case 'game_state':
-        initializeGame(data);
+        handleGameState(data);
         break;
-
       case 'move_made':
         handleOpponentMove(data);
         break;
-
       case 'clock_sync':
-        setWhiteTime(data.white_time);
-        setBlackTime(data.black_time);
+        handleClockSync(data);
         break;
-
       case 'state_snapshot':
-        applyStateSnapshot(data);
+        handleStateSnapshot(data);
         break;
-
       case 'game_ended':
-        handleGameEnd(data);
+        handleGameEnded(data);
         break;
-
       case 'draw_offer':
-        setDrawOffer({
-          from: data.offer_from,
-          username: data.username,
-        });
-        setShowDrawOfferModal(true);
+        handleDrawOffer(data);
         break;
-
       case 'draw_declined':
-        setError('Draw offer was declined');
-        setTimeout(() => setError(null), 3000);
+        handleDrawDeclined();
         break;
-
       case 'chat_message':
         if (chatMessageHandler) {
           chatMessageHandler(data);
         }
         break;
-
       case 'error':
-        console.error('Game error:', data.message);
+        console.error('❌ Server error:', data.message);
         setError(data.message);
+        setTimeout(() => setError(null), 5000);
         break;
-        
       default:
-        console.warn('Unknown message type:', data.type);
+        console.warn('⚠️ Unknown message type:', data.type);
     }
-  }, [chatMessageHandler, initializeGame, handleOpponentMove, applyStateSnapshot, handleGameEnd]);
+  }, [
+    handleGameState,
+    handleOpponentMove,
+    handleClockSync,
+    handleStateSnapshot,
+    handleGameEnded,
+    handleDrawOffer,
+    handleDrawDeclined,
+    chatMessageHandler,
+  ]);
 
-  // WEBSOCKET SETUP
-  const handleOpen = useCallback(() => {
-    console.log('WebSocket connected');
+  // =================================================================
+  // WEBSOCKET CONNECTION
+  // =================================================================
+
+  const handleWsOpen = useCallback(() => {
+    console.log('✅ WebSocket connected');
     setConnectionError(null);
   }, []);
 
-  const handleMessage = useCallback((data) => {
-    handleWebSocketMessage(data);
-  }, [handleWebSocketMessage]);
-
-  const handleError = useCallback((err) => {
-    console.error('WebSocket error:', err);
+  const handleWsError = useCallback((err) => {
+    console.error('❌ WebSocket error:', err);
     setConnectionError('Connection failed. Please check your internet.');
   }, []);
 
-  const handleClose = useCallback((event) => {
-    console.log('WebSocket closed', event.code);
+  const handleWsClose = useCallback((event) => {
+    console.log('🔌 WebSocket closed:', event.code);
     if (event.code === 1008 || event.code === 4001) {
       setConnectionError('Session expired. Please login again.');
       setTimeout(() => navigate('/login'), 3000);
     }
   }, [navigate]);
 
-  const { isConnected, lastMessage, send, error: wsError } = useWebSocket(`/ws/game/${gameId}/`, {
-    onOpen: handleOpen,
-    onMessage: handleMessage,
-    onError: handleError,
-    onClose: handleClose,
-    reconnect: true,
-    reconnectInterval: 3000,
-    maxReconnectAttempts: 3,
-  });
+  const { isConnected, send, error: wsError } = useWebSocket(
+    `/ws/game/${gameId}/`,
+    {
+      onOpen: handleWsOpen,
+      onMessage: handleWebSocketMessage,
+      onError: handleWsError,
+      onClose: handleWsClose,
+      reconnect: true,
+      reconnectInterval: 3000,
+      maxReconnectAttempts: 3,
+    }
+  );
 
-  // Store send function in ref
-  useEffect(() => {
-    sendRef.current = send;
-  }, [send]);
-
-  // Send join_game after WebSocket is connected
+  // Join game after connection
   useEffect(() => {
     if (isConnected && send) {
-      console.log('Joining game...');
+      console.log('📤 Joining game...');
       send({ type: 'join_game' });
     }
   }, [isConnected, send]);
 
-  // Handler callbacks that use send
-  const handleAcceptDraw = useCallback(() => {
-    if (sendRef.current) {
-      sendRef.current({ type: 'accept_draw' });
-      setShowDrawOfferModal(false);
-      setDrawOffer(null);
-    }
-  }, []);
-
-  const handleDeclineDraw = useCallback(() => {
-    if (sendRef.current) {
-      sendRef.current({ type: 'decline_draw' });
-      setShowDrawOfferModal(false);
-      setDrawOffer(null);
-    }
-  }, []);
-
+  // =================================================================
   // GAME LOGIC
+  // =================================================================
+
   const handleMove = useCallback((from, to) => {
-    if (isSpectator) return;
-    if (gameState.status !== 'ongoing') return;
-    if (board.turn !== playerColor) return;
+    if (isSpectator || gameState.status !== 'ongoing') {
+      console.log('🚫 Cannot move - spectator or game not ongoing');
+      return;
+    }
+    
+    if (board.turn !== playerColor) {
+      console.log('🚫 Not your turn');
+      return;
+    }
 
     const piece = board.getPiece(from);
-    if (!piece || piece.color !== playerColor) return;
+    if (!piece || piece.color !== playerColor) {
+      console.log('🚫 Invalid piece selection');
+      return;
+    }
 
+    // Check for pawn promotion
     if (piece.type === 'pawn') {
       const toCoord = board.squareToCoordinate(to);
       const promotionRank = piece.color === 'white' ? 7 : 0;
@@ -328,25 +380,34 @@ function Game() {
   }, [pendingMove]);
 
   const executeMove = useCallback((from, to, promotion) => {
+    console.log('🎯 Executing move:', from, to, promotion);
+
+    // Validate move first
+    if (!validator.isValidMove(from, to, promotion)) {
+      setError('Invalid move');
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
+
+    const piece = board.getPiece(from);
+    const capturedPiece = board.getPiece(to);
+
+    // Create optimistic local update
     const tempBoard = board.clone();
-    const piece = tempBoard.getPiece(from);
+    const tempPiece = tempBoard.getPiece(from);
     
-    if (!piece) return;
-    
-    if (promotion && piece.type === 'pawn') {
-      piece.type = promotion;
+    if (promotion && tempPiece.type === 'pawn') {
+      tempPiece.type = promotion;
     }
     
-    const capturedPiece = tempBoard.getPiece(to);
-    
-    tempBoard.board[to] = piece;
+    tempBoard.board[to] = tempPiece;
     delete tempBoard.board[from];
     tempBoard.turn = tempBoard.turn === 'white' ? 'black' : 'white';
     
     setBoard(tempBoard);
-    setValidator(new MoveValidator(tempBoard));
-    
-    const tempMove = {
+
+    // Add optimistic move to history
+    const optimisticMove = {
       from,
       to,
       piece: piece.type,
@@ -357,50 +418,74 @@ function Game() {
       timestamp: Date.now(),
     };
     
-    setMoves(prev => [...prev, tempMove]);
+    setMoves(prev => [...prev, optimisticMove]);
     setCurrentMoveIndex(prev => prev + 1);
-    
+
+    // Update captured pieces optimistically
     if (capturedPiece) {
       setCapturedPieces(prev => ({
         ...prev,
         [board.turn]: [...prev[board.turn], capturedPiece.type],
       }));
     }
-    
-    if (sendRef.current) {
-      sendRef.current({
+
+    // Update last move
+    setGameState(prev => ({
+      ...prev,
+      lastMove: { from, to },
+    }));
+
+    // Send to server
+    if (send) {
+      send({
         type: 'move',
         payload: { from, to, promotion, timestamp: Date.now() },
       });
     }
-  }, [board]);
+  }, [board, validator, send]);
 
   const handleMoveClick = useCallback((index) => {
-    if (sendRef.current) {
-      sendRef.current({
+    if (send) {
+      send({
         type: 'jump_to_move',
         payload: { move_index: index },
       });
     }
-  }, []);
+  }, [send]);
 
   const handleResign = useCallback(() => {
-    if (sendRef.current) {
-      sendRef.current({ type: 'resign' });
+    if (send) {
+      send({ type: 'resign' });
     }
-  }, []);
+  }, [send]);
 
   const handleOfferDraw = useCallback(() => {
-    if (sendRef.current) {
-      sendRef.current({ type: 'offer_draw' });
+    if (send) {
+      send({ type: 'offer_draw' });
     }
-  }, []);
+  }, [send]);
+
+  const handleAcceptDraw = useCallback(() => {
+    if (send) {
+      send({ type: 'accept_draw' });
+      setShowDrawOfferModal(false);
+      setDrawOffer(null);
+    }
+  }, [send]);
+
+  const handleDeclineDraw = useCallback(() => {
+    if (send) {
+      send({ type: 'decline_draw' });
+      setShowDrawOfferModal(false);
+      setDrawOffer(null);
+    }
+  }, [send]);
 
   const handleRequestTakeback = useCallback(() => {
-    if (sendRef.current) {
-      sendRef.current({ type: 'request_takeback' });
+    if (send) {
+      send({ type: 'request_takeback' });
     }
-  }, []);
+  }, [send]);
 
   const getValidMoves = useCallback((square) => {
     return validator.getPieceMoves(square);
@@ -410,9 +495,24 @@ function Game() {
     setChatMessageHandler(() => handler);
   }, []);
 
-  // RENDER 
+  // =================================================================
+  // RENDER
+  // =================================================================
+
+  if (!isInitialized) {
+    return (
+      <div className="container mx-auto max-w-7xl h-[calc(100vh-150px)] flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 text-purple-400 animate-spin mx-auto mb-4" />
+          <p className="text-white text-lg">Loading game...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto max-w-7xl h-[calc(100vh-150px)]">
+      {/* Connection Error */}
       {connectionError && (
         <div className="fixed top-20 right-6 bg-orange-500/90 text-white px-6 py-3 rounded-lg shadow-lg z-50">
           {connectionError}
@@ -420,6 +520,7 @@ function Game() {
         </div>
       )}
 
+      {/* Move Error */}
       {error && (
         <div className="fixed top-20 right-6 bg-red-500/90 text-white px-6 py-3 rounded-lg shadow-lg z-50">
           {error}
@@ -428,7 +529,7 @@ function Game() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_280px] gap-4 h-full">
-        {/* Left Sidebar */}
+        {/* Left Sidebar - Opponent */}
         <div className="space-y-6">
           <GameClock
             initialTime={playerColor === 'white' ? blackTime : whiteTime}
@@ -468,7 +569,7 @@ function Game() {
                 check: gameState.check,
                 status: gameState.status,
                 winner: gameState.winner,
-                lastMove: moves[moves.length - 1],
+                lastMove: gameState.lastMove,
               }}
               onMove={handleMove}
               isSpectator={isSpectator}
@@ -478,7 +579,7 @@ function Game() {
           </div>
         </div>
 
-        {/* Right Sidebar */}
+        {/* Right Sidebar - Player */}
         <div className="space-y-6">
           <GameClock
             initialTime={playerColor === 'white' ? whiteTime : blackTime}
@@ -507,7 +608,7 @@ function Game() {
               gameId={gameId}
               isPlayerChat={!isSpectator}
               currentUser={user}
-              websocketSend={sendRef.current}
+              websocketSend={send}
               onMessage={registerChatHandler}
             />
           </div>
@@ -515,12 +616,14 @@ function Game() {
       </div>
 
       {/* Draw Offer Modal */}
-      <DrawOfferModal
-        isOpen={showDrawOfferModal}
-        offerFrom={drawOffer}
-        onAccept={handleAcceptDraw}
-        onDecline={handleDeclineDraw}
-      />
+      {showDrawOfferModal && (
+        <DrawOfferModal
+          isOpen={showDrawOfferModal}
+          offerFrom={drawOffer}
+          onAccept={handleAcceptDraw}
+          onDecline={handleDeclineDraw}
+        />
+      )}
 
       {/* Promotion Modal */}
       <PromotionModal

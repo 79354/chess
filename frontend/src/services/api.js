@@ -157,7 +157,7 @@ class ApiService {
         return this.request(endpoint, { ...options, method: "DELETE"});
     }
 
-    // ==================== AUTH METHODS ====================
+    // AUTH METHODS
     async register(userData) {
         return this.post('/auth/register/', userData, { auth: false });
     }
@@ -193,7 +193,7 @@ class ApiService {
         return this.get(`/auth/users/${username}/`, { auth: false });
     }
 
-    // ==================== FRIENDS METHODS ====================
+    // FRIENDS METHODS
     async getFriends() {
         return this.get('/auth/friends/');
     }
@@ -222,7 +222,7 @@ class ApiService {
         return this.get(`/auth/users/search/?q=${encodeURIComponent(query)}`);
     }
 
-    // ==================== GAME METHODS ====================
+    // GAME METHODS
     async listGames(params = {}) {
         const queryString = new URLSearchParams(params).toString();
         return this.get(`/game/games/${queryString ? `?${queryString}` : ''}`);
@@ -240,7 +240,7 @@ class ApiService {
         return this.get(`/game/user-games/${username}/`);
     }
 
-    // ==================== CHALLENGE METHODS ====================
+    // CHALLENGE METHODS
     async sendChallenge(friendId, timeControl) {
         return this.post('/game/challenges/send/', {
             friend_id: friendId,
@@ -264,7 +264,7 @@ class ApiService {
         return this.post(`/game/challenges/${challengeId}/cancel/`);
     }
 
-    // ==================== UTILITY METHODS ====================
+    // UTILITY METHODS
     async uploadFile(endpoint, file, additionalData = {}) {
         const formData = new FormData();
         formData.append('file', file);
@@ -292,7 +292,7 @@ class ApiService {
         return await response.json();
     }
 
-    // ==================== HELPER METHODS ====================
+    // HELPER METHODS
     isAuthenticated() {
         return !!localStorage.getItem('token');
     }
