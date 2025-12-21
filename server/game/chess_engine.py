@@ -79,10 +79,13 @@ class ChessEngine:
     
     def make_move(self, from_sq, to_sq, promotion=None):
         piece = self.board[from_sq]
-        captured = self.board.get(to_sq)
+        captured_piece_obj = self.board.get(to_sq)
+        
+        # Extract captured piece TYPE as string, or empty string
+        captured_type = captured_piece_obj['type'] if captured_piece_obj else ''
         
         # Make move
-        result = self.make_move_unsafe(from_sq, to_sq, promotion)
+        self.make_move_unsafe(from_sq, to_sq, promotion)
         
         # Check game status
         opponent = 'black' if self.turn == 'white' else 'white'
@@ -105,8 +108,8 @@ class ChessEngine:
         return {
             'fen': self.to_fen(),
             'piece': piece['type'],
-            'captured': captured['type'] if captured else None,
-            'notation': self.to_algebraic(from_sq, to_sq, piece, captured, promotion),
+            'captured': captured_type,
+            'notation': self.to_algebraic(from_sq, to_sq, piece, captured_piece_obj, promotion),
             'is_check': is_check,
             'is_checkmate': is_checkmate,
             'status': status,

@@ -57,6 +57,10 @@ class GameConsumer(AsyncWebsocketConsumer):
             await self.resign()
         elif msg_type == 'offer_draw':
             await self.offer_draw()
+        elif msg_type == 'accept_draw':
+            await self.accept_draw()
+        elif msg_type == 'decline_draw':
+            await self.decline_draw()
     
     async def join_game(self):
         """Initialize game state for new connection"""
@@ -439,6 +443,10 @@ class GameConsumer(AsyncWebsocketConsumer):
         move_num = (game.move_count // 2) + 1
         time_left = game.white_time_left if color == 'white' else game.black_time_left
         
+        # Ensure captured_piece is always a string, never None
+        captured = result.get('captured')
+        captured_piece = captured if captured else ''
+        
         return Move.objects.create(
             game=game,
             move_number=move_num,
@@ -446,7 +454,7 @@ class GameConsumer(AsyncWebsocketConsumer):
             from_square=from_sq,
             to_square=to_sq,
             piece=result['piece'],
-            captured_piece=result.get('captured', ''),
+            captured_piece=captured_piece,
             promotion=result.get('promotion', ''),
             algebraic_notation=result['notation'],
             fen_after=result['fen'],
