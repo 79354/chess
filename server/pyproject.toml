@@ -23,6 +23,7 @@ dependencies = [
     # Redis (for caching and channels)
     "django-redis==5.4.0",
     "redis==5.0.0",
+    "redis[hiredis]>=5.0.0"
 
     # Database
     "psycopg2-binary==2.9.9", # PostgreSQL

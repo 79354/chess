@@ -4,63 +4,134 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
 from datetime import datetime
+import redis.asyncio as aioredis
+from django.conf import settings
 
 
 class GameConsumer(AsyncWebsocketConsumer):
+    """Event-driven game consumer using Redis pub/sub"""
+    
     async def connect(self):
         self.game_id = self.scope['url_route']['kwargs']['game_id']
         self.room_group_name = f'game_{self.game_id}'
+        self.user = self.scope['user']
         
+        # Redis pub/sub channels
+        self.game_channel = f"game:{self.game_id}:events"
+        self.clock_channel = f"game:{self.game_id}:clock"
+        
+        # Connect to Redis
+        self.redis = await aioredis.from_url(
+            f"redis://{getattr(settings, 'REDIS_HOST', 'localhost')}:{getattr(settings, 'REDIS_PORT', 6379)}",
+            encoding="utf-8",
+            decode_responses=True
+        )
+        
+        # Subscribe to game events
+        self.pubsub = self.redis.pubsub()
+        await self.pubsub.subscribe(self.game_channel, self.clock_channel)
+        
+        # Start listening task
+        self.listener_task = asyncio.create_task(self._redis_listener())
+        
+        # Join channel layer group for broadcasts
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
         )
-
-        # Subscribe to clock
-        self.clock_manager = GameClockManager.get_or_create(self.game_id)
-        self.clock_manager.subscribe(self.channel_name)
+        
+        # Subscribe to clock manager
+        self.clock_manager = GameClockManager.get_or_create(self.game_id, self.redis)
+        await self.clock_manager.subscribe(self.channel_name)
         
         await self.accept()
+        print(f"✅ {self.user.username} connected to game {self.game_id}")
     
     async def disconnect(self, close_code):
-        if hasattr(self, 'clock_manager'):
-            self.clock_manager.unsubscribe(self.channel_name)
+        # Unsubscribe from Redis
+        if hasattr(self, 'pubsub'):
+            await self.pubsub.unsubscribe(self.game_channel, self.clock_channel)
+            await self.pubsub.close()
         
+        # Cancel listener
+        if hasattr(self, 'listener_task'):
+            self.listener_task.cancel()
+        
+        # Unsubscribe from clock
+        if hasattr(self, 'clock_manager'):
+            await self.clock_manager.unsubscribe(self.channel_name)
+        
+        # Leave channel layer group
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
         )
+        
+        if hasattr(self, 'redis'):
+            await self.redis.close()
+        
+        print(f"🔌 {self.user.username} disconnected from game {self.game_id}")
     
-    async def clock_tick(self, event):
-        """Handle clock tick from clock manager"""
-        await self.send(json.dumps({
-            'type': 'clock_sync',
-            'white_time': event['white_time'],
-            'black_time': event['black_time'],
-        }))
-
+    async def _redis_listener(self):
+        """Listen for Redis pub/sub messages"""
+        try:
+            async for message in self.pubsub.listen():
+                if message['type'] == 'message':
+                    try:
+                        data = json.loads(message['data'])
+                        await self._handle_redis_event(data)
+                    except json.JSONDecodeError:
+                        print(f"❌ Failed to parse Redis message: {message['data']}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"❌ Redis listener error: {e}")
+    
+    async def _handle_redis_event(self, event):
+        """Handle incoming Redis events"""
+        event_type = event.get('type')
+        
+        if event_type == 'move_made':
+            await self.send(json.dumps(event))
+        elif event_type == 'game_ended':
+            await self.send(json.dumps(event))
+        elif event_type == 'draw_offer':
+            await self.send(json.dumps(event))
+        elif event_type == 'draw_declined':
+            await self.send(json.dumps(event))
+        elif event_type == 'clock_sync':
+            await self.send(json.dumps(event))
+        else:
+            await self.send(json.dumps(event))
+    
     async def receive(self, text_data):
         """Handle incoming WebSocket messages"""
-        data = json.loads(text_data)
-        msg_type = data.get('type')
-        payload = data.get('payload', {})
-        
-        if msg_type == 'join_game':
-            await self.join_game()
-        elif msg_type == 'move':
-            await self.make_move(payload)
-        elif msg_type == 'chat':
-            await self.handle_chat(payload)
-        elif msg_type == 'jump_to_move':
-            await self.jump_to_move(payload)
-        elif msg_type == 'resign':
-            await self.resign()
-        elif msg_type == 'offer_draw':
-            await self.offer_draw()
-        elif msg_type == 'accept_draw':
-            await self.accept_draw()
-        elif msg_type == 'decline_draw':
-            await self.decline_draw()
+        try:
+            data = json.loads(text_data)
+            msg_type = data.get('type')
+            payload = data.get('payload', {})
+            
+            if msg_type == 'join_game':
+                await self.join_game()
+            elif msg_type == 'move':
+                await self.make_move(payload)
+            elif msg_type == 'chat':
+                await self.handle_chat(payload)
+            elif msg_type == 'jump_to_move':
+                await self.jump_to_move(payload)
+            elif msg_type == 'resign':
+                await self.resign()
+            elif msg_type == 'offer_draw':
+                await self.offer_draw()
+            elif msg_type == 'accept_draw':
+                await self.accept_draw()
+            elif msg_type == 'decline_draw':
+                await self.decline_draw()
+        except json.JSONDecodeError:
+            await self.send(json.dumps({
+                'type': 'error',
+                'message': 'Invalid JSON'
+            }))
     
     async def join_game(self):
         """Initialize game state for new connection"""
@@ -106,21 +177,17 @@ class GameConsumer(AsyncWebsocketConsumer):
         }))
     
     async def make_move(self, payload):
-        """Handle move from player - FIXED TO PREVENT RECURSION"""
-        game = await self.get_game()
-        if not game or game.status != 'ongoing':
-            await self.send(json.dumps({
-                'type': 'error',
-                'message': 'Invalid game state'
-            }))
-            return
-        
+        """
+        Handle move from player - Event-driven with Redis
+        """
         from_square = payload.get('from')
         to_square = payload.get('to')
         promotion = payload.get('promotion')
         
-        # Acquire lock
-        lock_acquired = await self.acquire_move_lock(game.game_id)
+        # Acquire distributed lock via Redis
+        lock_key = f"lock:game:{self.game_id}:move"
+        lock_acquired = await self.redis.set(lock_key, self.user.id, nx=True, ex=5)
+        
         if not lock_acquired:
             await self.send(json.dumps({
                 'type': 'error',
@@ -129,10 +196,28 @@ class GameConsumer(AsyncWebsocketConsumer):
             return
         
         try:
-            # CRITICAL FIX: Capture color BEFORE state changes
+            game = await self.get_game()
+            
+            if not game or game.status != 'ongoing':
+                await self.send(json.dumps({
+                    'type': 'error',
+                    'message': 'Invalid game state'
+                }))
+                return
+            
+            # Verify it's player's turn
+            if (game.current_turn == 'white' and game.white_player.id != self.user.id) or \
+               (game.current_turn == 'black' and game.black_player.id != self.user.id):
+                await self.send(json.dumps({
+                    'type': 'error',
+                    'message': 'Not your turn'
+                }))
+                return
+            
+            # CRITICAL: Capture color BEFORE engine changes state
             moving_color = game.current_turn
             
-            # Validate move
+            # Validate and execute move
             from .chess_engine import ChessEngine
             engine = ChessEngine(game.current_fen)
             
@@ -152,42 +237,43 @@ class GameConsumer(AsyncWebsocketConsumer):
             else:
                 game.black_time_left += game.increment * 1000
             
-            # Save move and update game
+            # Save move to database
             move = await self.save_move(game, from_square, to_square, result, moving_color)
+            
+            # Update game state in database
             await self.update_game_state(
-                game.game_id, 
-                result['fen'], 
+                game.game_id,
+                result['fen'],
                 result.get('status'),
                 game.white_time_left,
                 game.black_time_left
             )
             
-            # FIXED: Get fresh game state once
-            game = await self.get_game()
+            # Publish move event to Redis
+            move_event = {
+                'type': 'move_made',
+                'move': {
+                    'from': from_square,
+                    'to': to_square,
+                    'notation': result['notation'],
+                    'piece': result['piece'],
+                    'captured': result.get('captured', ''),
+                    'fen': result['fen'],
+                    'status': result.get('status', 'ongoing'),
+                    'winner': result.get('winner'),
+                    'is_check': result.get('is_check', False),
+                    'color': moving_color,
+                    'timestamp': timezone.now().isoformat(),
+                    'sequence': game.move_count,
+                },
+                'white_time': game.white_time_left,
+                'black_time': game.black_time_left,
+            }
             
-            # Broadcast to all clients - CRITICAL: Use send_group_message to avoid recursion
-            await self.send_group_message(
-                self.room_group_name,
-                {
-                    'type': 'game_move_broadcast',  # Changed type name to avoid conflicts
-                    'move': {
-                        'from': from_square,
-                        'to': to_square,
-                        'notation': result['notation'],
-                        'piece': result['piece'],
-                        'captured': result.get('captured'),
-                        'fen': result['fen'],
-                        'status': result.get('status', 'ongoing'),
-                        'winner': result.get('winner'),
-                        'is_check': result.get('is_check', False),
-                        'color': moving_color,
-                        'timestamp': timezone.now().isoformat(),
-                        'sequence': game.move_count - 1,
-                    },
-                    'white_time': game.white_time_left,
-                    'black_time': game.black_time_left,
-                }
-            )
+            # Publish to Redis (all subscribers will receive)
+            await self.redis.publish(self.game_channel, json.dumps(move_event))
+            
+            print(f"✅ Move published: {moving_color} {from_square}->{to_square}")
             
         except Exception as e:
             print(f"❌ Move error: {e}")
@@ -198,23 +284,22 @@ class GameConsumer(AsyncWebsocketConsumer):
                 'message': f'Move failed: {str(e)}'
             }))
         finally:
-            await self.release_move_lock(game.game_id)
-
+            # Release lock
+            await self.redis.delete(lock_key)
+    
     async def handle_chat(self, payload):
-        """Broadcast chat message"""
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'chat_broadcast',
-                'message': {
-                    'id': payload.get('timestamp', str(timezone.now().timestamp())),
-                    'user': payload.get('user'),
-                    'text': payload.get('text'),
-                    'timestamp': payload.get('timestamp'),
-                    'is_system': payload.get('is_system', False),
-                }
+        """Broadcast chat message via Redis"""
+        chat_event = {
+            'type': 'chat_message',
+            'message': {
+                'id': payload.get('timestamp', str(timezone.now().timestamp())),
+                'user': payload.get('user'),
+                'text': payload.get('text'),
+                'timestamp': payload.get('timestamp'),
+                'is_system': payload.get('is_system', False),
             }
-        )
+        }
+        await self.redis.publish(self.game_channel, json.dumps(chat_event))
     
     async def jump_to_move(self, payload):
         """Send state snapshot at specific move"""
@@ -249,6 +334,7 @@ class GameConsumer(AsyncWebsocketConsumer):
         }))
     
     async def resign(self):
+        """Handle resignation via Redis event"""
         game = await self.get_game()
         
         if not game or game.status != 'ongoing':
@@ -258,14 +344,12 @@ class GameConsumer(AsyncWebsocketConsumer):
             }))
             return
         
-        # Determine who resigned and who won
-        resigning_user = self.scope['user']
-        
-        if game.white_player.id == resigning_user.id:
+        # Determine winner
+        if game.white_player.id == self.user.id:
             winner = game.black_player
             winner_color = 'black'
             result = '0-1'
-        elif game.black_player.id == resigning_user.id:
+        elif game.black_player.id == self.user.id:
             winner = game.white_player
             winner_color = 'white'
             result = '1-0'
@@ -276,7 +360,7 @@ class GameConsumer(AsyncWebsocketConsumer):
             }))
             return
         
-        # Update game status
+        # Update game in database
         await self.end_game(
             game.game_id,
             status='completed',
@@ -285,21 +369,19 @@ class GameConsumer(AsyncWebsocketConsumer):
             termination='resignation'
         )
         
-        # Broadcast to all players
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'game_ended_broadcast',
-                'status': 'completed',
-                'winner': winner_color,
-                'termination': 'resignation',
-                'result': result,
-                'message': f'{resigning_user.username} resigned'
-            }
-        )
-
+        # Publish game end event to Redis
+        end_event = {
+            'type': 'game_ended',
+            'status': 'completed',
+            'winner': winner_color,
+            'termination': 'resignation',
+            'result': result,
+            'message': f'{self.user.username} resigned'
+        }
+        await self.redis.publish(self.game_channel, json.dumps(end_event))
     
     async def offer_draw(self):
+        """Offer draw via Redis"""
         game = await self.get_game()
         
         if not game or game.status != 'ongoing':
@@ -309,12 +391,10 @@ class GameConsumer(AsyncWebsocketConsumer):
             }))
             return
         
-        offering_user = self.scope['user']
-        
         # Determine who made the offer
-        if game.white_player.id == offering_user.id:
+        if game.white_player.id == self.user.id:
             offer_from = 'white'
-        elif game.black_player.id == offering_user.id:
+        elif game.black_player.id == self.user.id:
             offer_from = 'black'
         else:
             await self.send(json.dumps({
@@ -323,17 +403,16 @@ class GameConsumer(AsyncWebsocketConsumer):
             }))
             return
         
-        # Broadcast draw offer to all players
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'draw_offer_broadcast',
-                'offer_from': offer_from,
-                'username': offering_user.username,
-            }
-        )
-
+        # Publish draw offer to Redis
+        draw_event = {
+            'type': 'draw_offer',
+            'offer_from': offer_from,
+            'username': self.user.username,
+        }
+        await self.redis.publish(self.game_channel, json.dumps(draw_event))
+    
     async def accept_draw(self):
+        """Accept draw via Redis"""
         game = await self.get_game()
         
         if not game or game.status != 'ongoing':
@@ -352,76 +431,33 @@ class GameConsumer(AsyncWebsocketConsumer):
             termination='agreement'
         )
         
-        # Broadcast game ended
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'game_ended_broadcast',
-                'status': 'completed',
-                'winner': None,
-                'termination': 'agreement',
-                'result': '1/2-1/2',
-                'message': 'Draw by agreement'
-            }
-        )
-
+        # Publish game end to Redis
+        end_event = {
+            'type': 'game_ended',
+            'status': 'completed',
+            'winner': None,
+            'termination': 'agreement',
+            'result': '1/2-1/2',
+            'message': 'Draw by agreement'
+        }
+        await self.redis.publish(self.game_channel, json.dumps(end_event))
+    
     async def decline_draw(self):
-        """Decline draw offer - NEW FUNCTION"""
-        # Broadcast draw declined
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'draw_declined_broadcast',
-                'message': 'Draw offer declined'
-            }
-        )
-    
-    # Event handlers
-    async def draw_offer_broadcast(self, event):
-        """Send draw offer to client"""
-        await self.send(json.dumps({
-            'type': 'draw_offer',
-            'offer_from': event['offer_from'],
-            'username': event['username'],
-        }))
-    
-    async def draw_declined_broadcast(self, event):
-        """Send draw declined to client"""
-        await self.send(json.dumps({
+        """Decline draw offer via Redis"""
+        decline_event = {
             'type': 'draw_declined',
-            'message': event['message'],
-        }))
+            'message': 'Draw offer declined'
+        }
+        await self.redis.publish(self.game_channel, json.dumps(decline_event))
     
-    # FIXED: Event handlers with unique names to avoid recursion
-    async def game_move_broadcast(self, event):
-        """Send move to client - FIXED to prevent recursion"""
+    # Channel layer handlers (for clock updates from manager)
+    async def clock_tick(self, event):
+        """Handle clock tick from clock manager"""
         await self.send(json.dumps({
-            'type': 'move_made',
-            'move': event['move'],
+            'type': 'clock_sync',
             'white_time': event['white_time'],
             'black_time': event['black_time'],
         }))
-    
-    async def chat_broadcast(self, event):
-        """Send chat message to client"""
-        await self.send(json.dumps({
-            'type': 'chat_message',
-            'message': event['message'],
-        }))
-    
-    async def game_ended_broadcast(self, event):
-        """Send game end notification"""
-        await self.send(json.dumps({
-            'type': 'game_ended',
-            'status': event['status'],
-            'winner': event.get('winner'),
-            'termination': event.get('termination'),
-        }))
-    
-    # Helper to send group messages
-    async def send_group_message(self, group_name, message):
-        """Send message to group via channel layer"""
-        await self.channel_layer.group_send(group_name, message)
     
     # Database operations
     @database_sync_to_async
@@ -443,9 +479,7 @@ class GameConsumer(AsyncWebsocketConsumer):
         move_num = (game.move_count // 2) + 1
         time_left = game.white_time_left if color == 'white' else game.black_time_left
         
-        # Ensure captured_piece is always a string, never None
-        captured = result.get('captured')
-        captured_piece = captured if captured else ''
+        captured = result.get('captured', '')
         
         return Move.objects.create(
             game=game,
@@ -454,7 +488,7 @@ class GameConsumer(AsyncWebsocketConsumer):
             from_square=from_sq,
             to_square=to_sq,
             piece=result['piece'],
-            captured_piece=captured_piece,
+            captured_piece=captured,
             promotion=result.get('promotion', ''),
             algebraic_notation=result['notation'],
             fen_after=result['fen'],
@@ -466,7 +500,6 @@ class GameConsumer(AsyncWebsocketConsumer):
     
     @database_sync_to_async
     def update_game_state(self, game_id, fen, status, white_time, black_time):
-        """FIXED: Update game in single atomic operation"""
         from .models import Game
         
         game = Game.objects.get(game_id=game_id)
@@ -483,18 +516,7 @@ class GameConsumer(AsyncWebsocketConsumer):
         game.save()
     
     @database_sync_to_async
-    def acquire_move_lock(self, game_id):
-        from django.core.cache import cache
-        return cache.add(f'move_lock_{game_id}', 'locked', timeout=5)
-
-    @database_sync_to_async
-    def release_move_lock(self, game_id):
-        from django.core.cache import cache
-        cache.delete(f'move_lock_{game_id}')
-
-    @database_sync_to_async
     def end_game(self, game_id, status, result, winner, termination):
-        """End the game with given parameters"""
         from .models import Game
         
         game = Game.objects.get(game_id=game_id)
@@ -504,22 +526,20 @@ class GameConsumer(AsyncWebsocketConsumer):
         game.termination = termination
         game.ended_at = timezone.now()
         
-        # Calculate rating changes if needed
+        # Calculate rating changes
         if result != '1/2-1/2':
-            white_rating_change, black_rating_change = self._calculate_rating_changes(
+            white_change, black_change = self._calculate_rating_changes(
                 game.white_rating_before,
                 game.black_rating_before,
                 result
             )
             
-            game.white_rating_after = game.white_rating_before + white_rating_change
-            game.black_rating_after = game.black_rating_before + black_rating_change
+            game.white_rating_after = game.white_rating_before + white_change
+            game.black_rating_after = game.black_rating_before + black_change
             
-            # Update player ratings
             game.white_player.rating = game.white_rating_after
             game.black_player.rating = game.black_rating_after
             
-            # Update statistics
             if result == '1-0':
                 game.white_player.games_won += 1
                 game.black_player.games_lost += 1
@@ -533,7 +553,6 @@ class GameConsumer(AsyncWebsocketConsumer):
             game.white_player.save()
             game.black_player.save()
         else:
-            # Draw
             game.white_rating_after = game.white_rating_before
             game.black_rating_after = game.black_rating_before
             
@@ -546,22 +565,17 @@ class GameConsumer(AsyncWebsocketConsumer):
             game.black_player.save()
         
         game.save()
-
+    
     def _calculate_rating_changes(self, white_rating, black_rating, result):
-        """Calculate ELO rating changes"""
-        K = 32  # K-factor
-        
-        # Expected scores
+        K = 32
         expected_white = 1 / (1 + 10 ** ((black_rating - white_rating) / 400))
         expected_black = 1 - expected_white
         
-        # Actual scores
         if result == '1-0':
             actual_white, actual_black = 1, 0
-        else:  # '0-1'
+        else:
             actual_white, actual_black = 0, 1
         
-        # Rating changes
         white_change = round(K * (actual_white - expected_white))
         black_change = round(K * (actual_black - expected_black))
         
@@ -569,27 +583,28 @@ class GameConsumer(AsyncWebsocketConsumer):
 
 
 class GameClockManager:
-    """Singleton clock manager per game"""
+    """Redis-based clock manager"""
     _instances = {}
     
     @classmethod
-    def get_or_create(cls, game_id):
+    def get_or_create(cls, game_id, redis_client):
         if game_id not in cls._instances:
-            cls._instances[game_id] = cls(game_id)
+            cls._instances[game_id] = cls(game_id, redis_client)
         return cls._instances[game_id]
     
-    def __init__(self, game_id):
+    def __init__(self, game_id, redis_client):
         self.game_id = game_id
+        self.redis = redis_client
         self.task = None
         self.last_tick = None
         self.subscribers = set()
     
-    def subscribe(self, channel_name):
+    async def subscribe(self, channel_name):
         self.subscribers.add(channel_name)
         if not self.task or self.task.done():
             self.task = asyncio.create_task(self._tick_loop())
     
-    def unsubscribe(self, channel_name):
+    async def unsubscribe(self, channel_name):
         self.subscribers.discard(channel_name)
         if not self.subscribers and self.task:
             self.task.cancel()
@@ -626,6 +641,15 @@ class GameClockManager:
                 
                 await self._save_time(game)
                 
+                # Publish clock to Redis
+                clock_event = {
+                    'type': 'clock_sync',
+                    'white_time': game.white_time_left,
+                    'black_time': game.black_time_left,
+                }
+                await self.redis.publish(f"game:{self.game_id}:clock", json.dumps(clock_event))
+                
+                # Also send via channel layer for direct subscribers
                 await channel_layer.group_send(
                     f'game_{self.game_id}',
                     {
@@ -652,12 +676,7 @@ class GameClockManager:
         game.save(update_fields=['white_time_left', 'black_time_left'])
     
     async def _handle_timeout(self, game):
-        """Handle timeout - IMPLEMENTED"""
-        from channels.layers import get_channel_layer
-        
-        channel_layer = get_channel_layer()
-        
-        # Determine winner based on who ran out of time
+        """Handle timeout"""
         if game.white_time_left == 0:
             winner = game.black_player
             winner_color = 'black'
@@ -667,25 +686,21 @@ class GameClockManager:
             winner_color = 'white'
             result = '1-0'
         
-        # Update game in database
         await self._end_game_on_timeout(game.game_id, result, winner)
         
-        # Broadcast game ended
-        await channel_layer.group_send(
-            f'game_{self.game_id}',
-            {
-                'type': 'game_ended_broadcast',
-                'status': 'completed',
-                'winner': winner_color,
-                'termination': 'timeout',
-                'result': result,
-                'message': f'{winner.username} won on time'
-            }
-        )
+        # Publish timeout event to Redis
+        timeout_event = {
+            'type': 'game_ended',
+            'status': 'completed',
+            'winner': winner_color,
+            'termination': 'timeout',
+            'result': result,
+            'message': f'{winner.username} won on time'
+        }
+        await self.redis.publish(f"game:{self.game_id}:events", json.dumps(timeout_event))
     
     @database_sync_to_async
     def _end_game_on_timeout(self, game_id, result, winner):
-        """End game due to timeout"""
         from .models import Game
         
         game = Game.objects.get(game_id=game_id)
@@ -695,17 +710,21 @@ class GameClockManager:
         game.termination = 'timeout'
         game.ended_at = timezone.now()
         
-        # Calculate rating changes
-        white_rating_change, black_rating_change = self._calculate_rating_changes_sync(
-            game.white_rating_before,
-            game.black_rating_before,
-            result
-        )
+        K = 32
+        expected_white = 1 / (1 + 10 ** ((game.black_rating_before - game.white_rating_before) / 400))
+        expected_black = 1 - expected_white
         
-        game.white_rating_after = game.white_rating_before + white_rating_change
-        game.black_rating_after = game.black_rating_before + black_rating_change
+        if result == '1-0':
+            actual_white, actual_black = 1, 0
+        else:
+            actual_white, actual_black = 0, 1
         
-        # Update player ratings and statistics
+        white_change = round(K * (actual_white - expected_white))
+        black_change = round(K * (actual_black - expected_black))
+        
+        game.white_rating_after = game.white_rating_before + white_change
+        game.black_rating_after = game.black_rating_before + black_change
+        
         game.white_player.rating = game.white_rating_after
         game.black_player.rating = game.black_rating_after
         
@@ -722,23 +741,6 @@ class GameClockManager:
         game.white_player.save()
         game.black_player.save()
         game.save()
-    
-    def _calculate_rating_changes_sync(self, white_rating, black_rating, result):
-        """Calculate ELO rating changes (sync version)"""
-        K = 32
-        
-        expected_white = 1 / (1 + 10 ** ((black_rating - white_rating) / 400))
-        expected_black = 1 - expected_white
-        
-        if result == '1-0':
-            actual_white, actual_black = 1, 0
-        else:
-            actual_white, actual_black = 0, 1
-        
-        white_change = round(K * (actual_white - expected_white))
-        black_change = round(K * (actual_black - expected_black))
-        
-        return white_change, black_change
 
 
 class MatchmakingConsumer(AsyncWebsocketConsumer):

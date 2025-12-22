@@ -59,6 +59,7 @@ class ChessEngine:
         return files.index(square[0]), int(square[1]) - 1
     
     def is_valid_move(self, from_sq, to_sq, promotion=None):
+        """Validate if a move is legal"""
         piece = self.board.get(from_sq)
         if not piece or piece['color'] != self.turn:
             return False
@@ -67,49 +68,60 @@ class ChessEngine:
         if to_sq not in moves:
             return False
         
-        # Check if move leaves king in check
+        # CRITICAL: Check if move leaves king in check
+        # We need to simulate the move and check if OUR king is attacked
         test_board = self.copy()
         test_board.make_move_unsafe(from_sq, to_sq, promotion)
-        king_sq = test_board.find_king(self.turn)
         
+        # Find OUR king (the player making the move)
+        king_sq = test_board.find_king(self.turn)
+        if not king_sq:
+            return False
+        
+        # Check if OUR king is attacked after the move
         if test_board.is_square_attacked(king_sq, self.turn):
             return False
         
         return True
     
     def make_move(self, from_sq, to_sq, promotion=None):
-        piece = self.board[from_sq]
+        """
+        Make a move and return game state info
+        CRITICAL FIX: Proper turn management and game state checking
+        """
+        # Capture info BEFORE move
+        moving_piece = self.board[from_sq]
+        moving_color = moving_piece['color']  # Save who's moving
         captured_piece_obj = self.board.get(to_sq)
-        
-        # Extract captured piece TYPE as string, or empty string
         captured_type = captured_piece_obj['type'] if captured_piece_obj else ''
         
-        # Make move
+        # Execute move (this will update board and switch turn)
         self.make_move_unsafe(from_sq, to_sq, promotion)
         
-        # Check game status
-        opponent = 'black' if self.turn == 'white' else 'white'
-        is_check = self.is_in_check(opponent)
-        is_checkmate = self.is_checkmate(opponent)
-        is_stalemate = self.is_stalemate(opponent)
+        # AFTER move, the turn has switched to opponent
+        # So we need to check if OPPONENT is in check/checkmate/stalemate
+        opponent_color = self.turn  # Current turn is now the opponent
         
+        is_check = self.is_in_check(opponent_color)
+        is_checkmate = is_check and self.is_checkmate(opponent_color)
+        is_stalemate = not is_check and self.is_stalemate(opponent_color)
+        
+        # Determine game status
         status = 'ongoing'
         winner = None
         
         if is_checkmate:
             status = 'checkmate'
-            winner = self.turn
+            winner = moving_color  # Player who just moved wins
         elif is_stalemate:
             status = 'stalemate'
-        
-        # Switch turn
-        self.turn = opponent
+            winner = None
         
         return {
             'fen': self.to_fen(),
-            'piece': piece['type'],
+            'piece': moving_piece['type'],
             'captured': captured_type,
-            'notation': self.to_algebraic(from_sq, to_sq, piece, captured_piece_obj, promotion),
+            'notation': self.to_algebraic(from_sq, to_sq, moving_piece, captured_piece_obj, promotion),
             'is_check': is_check,
             'is_checkmate': is_checkmate,
             'status': status,
@@ -117,13 +129,17 @@ class ChessEngine:
         }
     
     def make_move_unsafe(self, from_sq, to_sq, promotion=None):
+        """
+        Execute move without validation
+        Updates board state and switches turn
+        """
         piece = self.board[from_sq]
         
         # Handle promotion
         if promotion and piece['type'] == 'pawn':
             piece['type'] = promotion
         
-        # Handle castling
+        # Handle castling - move rook
         if piece['type'] == 'king':
             from_file, from_rank = self.square_to_coord(from_sq)
             to_file, to_rank = self.square_to_coord(to_sq)
@@ -142,7 +158,7 @@ class ChessEngine:
                 del self.board[rook_from]
                 self.board[rook_to] = rook
             
-            # Update castling rights
+            # Update castling rights when king moves
             if piece['color'] == 'white':
                 self.castling['K'] = False
                 self.castling['Q'] = False
@@ -150,37 +166,53 @@ class ChessEngine:
                 self.castling['k'] = False
                 self.castling['q'] = False
         
-        # Handle en passant
+        # Handle en passant capture
         if piece['type'] == 'pawn' and to_sq == self.en_passant:
+            # Remove the captured pawn
             capture_rank = 4 if piece['color'] == 'white' else 3
             capture_sq = f"{to_sq[0]}{capture_rank + 1}"
-            del self.board[capture_sq]
+            if capture_sq in self.board:
+                del self.board[capture_sq]
         
-        # Update en passant
+        # Update en passant square for next move
         self.en_passant = None
         if piece['type'] == 'pawn':
             from_file, from_rank = self.square_to_coord(from_sq)
             to_file, to_rank = self.square_to_coord(to_sq)
             
+            # Double pawn push sets en passant
             if abs(to_rank - from_rank) == 2:
-                ep_rank = from_rank + 1 if piece['color'] == 'white' else from_rank - 1
+                ep_rank = (from_rank + to_rank) // 2
                 self.en_passant = self.coord_to_square(from_file, ep_rank)
         
-        # Update castling if rook moves
+        # Update castling rights if rook moves
         if piece['type'] == 'rook':
             if from_sq == 'a1': self.castling['Q'] = False
             if from_sq == 'h1': self.castling['K'] = False
             if from_sq == 'a8': self.castling['q'] = False
             if from_sq == 'h8': self.castling['k'] = False
         
-        # Make move
+        # Make the move
         captured = self.board.get(to_sq)
         self.board[to_sq] = piece
         del self.board[from_sq]
         
+        # Switch turn
+        self.turn = 'black' if self.turn == 'white' else 'white'
+        
+        # Update move counters
+        if piece['type'] == 'pawn' or captured:
+            self.half_moves = 0
+        else:
+            self.half_moves += 1
+        
+        if self.turn == 'white':
+            self.full_moves += 1
+        
         return captured
     
     def get_piece_moves(self, square):
+        """Get all pseudo-legal moves for a piece (doesn't check if king is in check)"""
         piece = self.board.get(square)
         if not piece:
             return []
@@ -202,29 +234,36 @@ class ChessEngine:
         direction = 1 if color == 'white' else -1
         start_rank = 1 if color == 'white' else 6
         
-        # Forward
-        forward = self.coord_to_square(file, rank + direction)
-        if forward and forward not in self.board:
-            moves.append(forward)
-            
-            # Double push
-            if rank == start_rank:
-                double = self.coord_to_square(file, rank + 2 * direction)
-                if double and double not in self.board:
-                    moves.append(double)
+        # Forward move
+        forward_rank = rank + direction
+        if 0 <= forward_rank < 8:
+            forward_sq = self.coord_to_square(file, forward_rank)
+            if forward_sq not in self.board:
+                moves.append(forward_sq)
+                
+                # Double push from starting position
+                if rank == start_rank:
+                    double_rank = rank + 2 * direction
+                    double_sq = self.coord_to_square(file, double_rank)
+                    if double_sq not in self.board:
+                        moves.append(double_sq)
         
         # Captures
         for file_delta in [-1, 1]:
             new_file = file + file_delta
             if 0 <= new_file < 8:
-                capture_sq = self.coord_to_square(new_file, rank + direction)
-                target = self.board.get(capture_sq)
-                
-                if target and target['color'] != color:
-                    moves.append(capture_sq)
-                
-                if capture_sq == self.en_passant:
-                    moves.append(capture_sq)
+                capture_rank = rank + direction
+                if 0 <= capture_rank < 8:
+                    capture_sq = self.coord_to_square(new_file, capture_rank)
+                    target = self.board.get(capture_sq)
+                    
+                    # Regular capture
+                    if target and target['color'] != color:
+                        moves.append(capture_sq)
+                    
+                    # En passant
+                    if capture_sq == self.en_passant:
+                        moves.append(capture_sq)
         
         return moves
     
@@ -279,9 +318,11 @@ class ChessEngine:
         ])
     
     def get_king_moves(self, square, color):
+        """Get king moves including castling"""
         moves = []
         file, rank = self.square_to_coord(square)
         
+        # Normal king moves (one square in any direction)
         for df in [-1, 0, 1]:
             for dr in [-1, 0, 1]:
                 if df == 0 and dr == 0:
@@ -294,35 +335,40 @@ class ChessEngine:
                     if not target or target['color'] != color:
                         moves.append(target_sq)
         
-        # Castling - with recursion protection
+        # Castling - only check if king is not in check
         if not self.is_square_attacked(square, color):
             start_rank = 0 if color == 'white' else 7
             
             # Kingside castling
             if (color == 'white' and self.castling['K']) or (color == 'black' and self.castling['k']):
-                f1 = self.coord_to_square(5, start_rank)
-                g1 = self.coord_to_square(6, start_rank)
+                f_sq = self.coord_to_square(5, start_rank)
+                g_sq = self.coord_to_square(6, start_rank)
                 
-                if (f1 not in self.board and g1 not in self.board and
-                    not self.is_square_attacked(f1, color) and
-                    not self.is_square_attacked(g1, color)):
-                    moves.append(g1)
+                # Check squares are empty and not attacked
+                if (f_sq not in self.board and g_sq not in self.board and
+                    not self.is_square_attacked(f_sq, color) and
+                    not self.is_square_attacked(g_sq, color)):
+                    moves.append(g_sq)
             
             # Queenside castling
             if (color == 'white' and self.castling['Q']) or (color == 'black' and self.castling['q']):
-                d1 = self.coord_to_square(3, start_rank)
-                c1 = self.coord_to_square(2, start_rank)
-                b1 = self.coord_to_square(1, start_rank)
+                d_sq = self.coord_to_square(3, start_rank)
+                c_sq = self.coord_to_square(2, start_rank)
+                b_sq = self.coord_to_square(1, start_rank)
                 
-                if (d1 not in self.board and c1 not in self.board and b1 not in self.board and
-                    not self.is_square_attacked(d1, color) and
-                    not self.is_square_attacked(c1, color)):
-                    moves.append(c1)
+                # Check squares are empty and not attacked
+                if (d_sq not in self.board and c_sq not in self.board and b_sq not in self.board and
+                    not self.is_square_attacked(d_sq, color) and
+                    not self.is_square_attacked(c_sq, color)):
+                    moves.append(c_sq)
         
         return moves
     
     def get_king_moves_simple(self, square, color):
-        """King moves WITHOUT castling check (prevents recursion in is_square_attacked)"""
+        """
+        King moves WITHOUT castling check
+        Used in is_square_attacked to prevent infinite recursion
+        """
         moves = []
         file, rank = self.square_to_coord(square)
         
@@ -338,20 +384,21 @@ class ChessEngine:
                     if not target or target['color'] != color:
                         moves.append(target_sq)
         
-        # NO CASTLING CHECK - this is for attack detection only
         return moves
-
+    
     def is_square_attacked(self, square, defender_color):
+        """
+        Check if a square is attacked by opponent
+        CRITICAL: Uses simple king moves to avoid recursion
+        """
         attacker_color = 'black' if defender_color == 'white' else 'white'
         
         for sq, piece in self.board.items():
             if piece['color'] == attacker_color:
-                # CRITICAL FIX: Use simple king moves to prevent recursion
+                # For kings, use simple moves (no castling check)
                 if piece['type'] == 'king':
-                    # For kings, use simple moves (no castling check)
                     moves = self.get_king_moves_simple(sq, piece['color'])
                 else:
-                    # For all other pieces, use normal move generation
                     moves = self.get_piece_moves(sq)
                 
                 if square in moves:
@@ -360,42 +407,71 @@ class ChessEngine:
         return False
     
     def find_king(self, color):
+        """Find king position for given color"""
         for square, piece in self.board.items():
             if piece['type'] == 'king' and piece['color'] == color:
                 return square
         return None
     
     def is_in_check(self, color):
+        """Check if king of given color is in check"""
         king_sq = self.find_king(color)
+        if not king_sq:
+            return False
         return self.is_square_attacked(king_sq, color)
     
     def is_checkmate(self, color):
+        """Check if given color is checkmated"""
         if not self.is_in_check(color):
             return False
         
+        # Try all possible moves to see if any gets out of check
         for square, piece in self.board.items():
             if piece['color'] == color:
                 moves = self.get_piece_moves(square)
                 for move in moves:
-                    if self.is_valid_move(square, move):
-                        return False
+                    # Simulate move
+                    test_board = self.copy()
+                    test_board.make_move_unsafe(square, move, None)
+                    
+                    # Check if king is still in check after move
+                    # CRITICAL: Since turn switched, we need to check the PREVIOUS color
+                    king_sq = test_board.find_king(color)
+                    if not test_board.is_square_attacked(king_sq, color):
+                        return False  # Found a legal move
         
-        return True
+        return True  # No legal moves found
     
     def is_stalemate(self, color):
+        """
+        Check if given color is stalemated
+        CRITICAL FIX: Ensure we're checking the right conditions
+        """
+        # Stalemate only if NOT in check
         if self.is_in_check(color):
             return False
         
+        # Check if player has any legal moves
         for square, piece in self.board.items():
             if piece['color'] == color:
                 moves = self.get_piece_moves(square)
                 for move in moves:
-                    if self.is_valid_move(square, move):
-                        return False
+                    # Test if move is legal (doesn't leave king in check)
+                    test_board = self.copy()
+                    
+                    # CRITICAL: Save color before move
+                    moving_color = color
+                    test_board.make_move_unsafe(square, move, None)
+                    
+                    # Check if OUR king is safe after the move
+                    king_sq = test_board.find_king(moving_color)
+                    if not test_board.is_square_attacked(king_sq, moving_color):
+                        return False  # Found a legal move
         
-        return True
+        return True  # No legal moves and not in check = stalemate
     
     def to_fen(self):
+        """Convert board to FEN string"""
         fen = ''
         
         for rank in range(7, -1, -1):
@@ -440,28 +516,33 @@ class ChessEngine:
         return char.upper() if piece['color'] == 'white' else char
     
     def to_algebraic(self, from_sq, to_sq, piece, captured, promotion):
-        # Simplified notation
+        """Convert move to algebraic notation"""
         notation = ''
         
+        # Castling
         if piece['type'] == 'king' and abs(ord(from_sq[0]) - ord(to_sq[0])) == 2:
-            return 'O-O' if to_sq[0] > from_sq[0] else 'O-O-O'
+            return 'O-O' if ord(to_sq[0]) > ord(from_sq[0]) else 'O-O-O'
         
+        # Piece prefix (except pawns)
         if piece['type'] != 'pawn':
             notation += piece['type'][0].upper()
         
+        # Capture notation
         if captured:
             if piece['type'] == 'pawn':
-                notation += from_sq[0]
+                notation += from_sq[0]  # File of origin for pawn captures
             notation += 'x'
         
         notation += to_sq
         
+        # Promotion
         if promotion:
             notation += '=' + promotion[0].upper()
         
         return notation
     
     def copy(self):
+        """Create a deep copy of the engine"""
         new_engine = ChessEngine()
         new_engine.board = {k: v.copy() for k, v in self.board.items()}
         new_engine.turn = self.turn
