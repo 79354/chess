@@ -1,11 +1,15 @@
-# Build stage with specific node version
-FROM node:18.20.8-alpine AS build
+# Build stage - Use full Node.js image instead of Alpine for better compatibility
+FROM node:18.20.8 AS build
 
 # Set working directory
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache python3 make g++
+# Install build dependencies (not needed for full image but keeping for safety)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy package files
 COPY package.json package-lock.json* ./
