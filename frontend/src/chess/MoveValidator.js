@@ -16,10 +16,15 @@ class MoveValidator {
 
     // Check if move leaves king in check
     const testBoard = this.board.clone();
+    
+    // FIX: Save the current turn BEFORE makeMove switches it
+    const currentTurn = this.board.turn;
+    
     this.makeMove(testBoard, from, to, promotion);
     
-    const kingSquare = this.findKing(testBoard, this.board.turn);
-    if (this.isSquareAttacked(testBoard, kingSquare, this.board.turn)) {
+    // FIX: Use the ORIGINAL turn (before switch) to check OUR king
+    const kingSquare = this.findKing(testBoard, currentTurn);
+    if (this.isSquareAttacked(testBoard, kingSquare, currentTurn)) {
       return false;
     }
 
@@ -247,19 +252,19 @@ class MoveValidator {
     const attackerColor = defenderColor === 'white' ? 'black' : 'white';
 
     for (const [sq, piece] of Object.entries(board.board)) {
-      if (piece.color === attackerColor) {
+      if (piece && piece.color === attackerColor) {  // Add null check
         // CRITICAL FIX: Use simple king moves to prevent recursion
         let moves;
         if (piece.type === 'king') {
           // For kings, use simple moves (no castling check)
-          const coord = board.squareToCoordinate(sq);
           moves = this.getKingMovesSimple(sq, piece.color);
         } else {
           // For all other pieces, use normal move generation
-          moves = this.getPieceMoves(sq);
+          const tempValidator = new MoveValidator(board);
+          moves = tempValidator.getPieceMoves(sq);
         }
         
-        if (moves.includes(square)) {
+        if (moves && moves.includes(square)) {
           return true;
         }
       }
@@ -280,11 +285,13 @@ class MoveValidator {
   makeMove(board, from, to, promotion) {
     const piece = board.getPiece(from);
     
-    if (promotion && piece.type === 'pawn') {
-      piece.type = promotion;
+    const movedPiece = {...piece};
+
+    if (promotion && movedPiece.type === 'pawn') {
+      movedPiece.type = promotion;
     }
 
-    board.board[to] = piece;
+    board.board[to] = movedPiece;
     delete board.board[from];
     
     board.turn = board.turn === 'white' ? 'black' : 'white';

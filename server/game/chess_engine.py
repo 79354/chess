@@ -133,7 +133,8 @@ class ChessEngine:
         Execute move without validation
         Updates board state and switches turn
         """
-        piece = self.board[from_sq]
+        # FIX: Create a COPY of the piece dictionary
+        piece = self.board[from_sq].copy()
         
         # Handle promotion
         if promotion and piece['type'] == 'pawn':
@@ -154,7 +155,8 @@ class ChessEngine:
                     rook_from = self.coord_to_square(0, from_rank)
                     rook_to = self.coord_to_square(3, from_rank)
                 
-                rook = self.board[rook_from]
+                # FIX: Copy the rook too
+                rook = self.board[rook_from].copy()
                 del self.board[rook_from]
                 self.board[rook_to] = rook
             
@@ -192,8 +194,10 @@ class ChessEngine:
             if from_sq == 'a8': self.castling['q'] = False
             if from_sq == 'h8': self.castling['k'] = False
         
-        # Make the move
+        # FIX: Capture before moving (need for return value)
         captured = self.board.get(to_sq)
+        
+        # Make the move
         self.board[to_sq] = piece
         del self.board[from_sq]
         
@@ -544,10 +548,13 @@ class ChessEngine:
     def copy(self):
         """Create a deep copy of the engine"""
         new_engine = ChessEngine()
+        
+        # Deep copy each piece dictionary
         new_engine.board = {k: v.copy() for k, v in self.board.items()}
         new_engine.turn = self.turn
         new_engine.castling = self.castling.copy()
         new_engine.en_passant = self.en_passant
         new_engine.half_moves = self.half_moves
         new_engine.full_moves = self.full_moves
+        
         return new_engine

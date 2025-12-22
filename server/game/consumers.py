@@ -20,45 +20,68 @@ class GameConsumer(AsyncWebsocketConsumer):
         self.game_channel = f"game:{self.game_id}:events"
         self.clock_channel = f"game:{self.game_id}:clock"
         
-        # Connect to Redis
-        self.redis = await aioredis.from_url(
-            f"redis://{getattr(settings, 'REDIS_HOST', 'localhost')}:{getattr(settings, 'REDIS_PORT', 6379)}",
-            encoding="utf-8",
-            decode_responses=True
-        )
+        # FIX: Better Redis connection with error handling
+        try:
+            self.redis = await aioredis.from_url(
+                f"redis://{getattr(settings, 'REDIS_HOST', 'localhost')}:{getattr(settings, 'REDIS_PORT', 6379)}",
+                encoding="utf-8",
+                decode_responses=True,
+                socket_keepalive=True,  # Keep connection alive
+                socket_keepalive_options={
+                    1: 1,  # TCP_KEEPIDLE
+                    2: 1,  # TCP_KEEPINTVL
+                    3: 3,  # TCP_KEEPCNT
+                },
+            )
+            
+            # Subscribe to game events
+            self.pubsub = self.redis.pubsub()
+            await self.pubsub.subscribe(self.game_channel, self.clock_channel)
+            
+            # Start listening task
+            self.listener_task = asyncio.create_task(self._redis_listener())
+            
+            print(f"Redis connected for game {self.game_id}")
+        except Exception as e:
+            print(f"Redis connection failed: {e}. Falling back to channel layer only.")
+            self.redis = None
+            self.pubsub = None
         
-        # Subscribe to game events
-        self.pubsub = self.redis.pubsub()
-        await self.pubsub.subscribe(self.game_channel, self.clock_channel)
-        
-        # Start listening task
-        self.listener_task = asyncio.create_task(self._redis_listener())
-        
-        # Join channel layer group for broadcasts
+        # Join channel layer group for broadcasts (fallback)
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
         )
         
         # Subscribe to clock manager
-        self.clock_manager = GameClockManager.get_or_create(self.game_id, self.redis)
-        await self.clock_manager.subscribe(self.channel_name)
+        if self.redis:
+            self.clock_manager = GameClockManager.get_or_create(self.game_id, self.redis)
+            await self.clock_manager.subscribe(self.channel_name)
         
         await self.accept()
-        print(f"✅ {self.user.username} connected to game {self.game_id}")
+        print(f"{self.user.username} connected to game {self.game_id}")
     
     async def disconnect(self, close_code):
+        print(f"🔌 {self.user.username} disconnecting from game {self.game_id} (code: {close_code})")
+        
         # Unsubscribe from Redis
-        if hasattr(self, 'pubsub'):
-            await self.pubsub.unsubscribe(self.game_channel, self.clock_channel)
-            await self.pubsub.close()
+        if hasattr(self, 'pubsub') and self.pubsub:
+            try:
+                await self.pubsub.unsubscribe(self.game_channel, self.clock_channel)
+                await self.pubsub.close()
+            except Exception as e:
+                print(f"Error unsubscribing from Redis: {e}")
         
         # Cancel listener
-        if hasattr(self, 'listener_task'):
+        if hasattr(self, 'listener_task') and self.listener_task:
             self.listener_task.cancel()
+            try:
+                await self.listener_task
+            except asyncio.CancelledError:
+                pass
         
         # Unsubscribe from clock
-        if hasattr(self, 'clock_manager'):
+        if hasattr(self, 'clock_manager') and self.clock_manager:
             await self.clock_manager.unsubscribe(self.channel_name)
         
         # Leave channel layer group
@@ -67,10 +90,14 @@ class GameConsumer(AsyncWebsocketConsumer):
             self.channel_name
         )
         
-        if hasattr(self, 'redis'):
-            await self.redis.close()
+        # Close Redis connection
+        if hasattr(self, 'redis') and self.redis:
+            try:
+                await self.redis.close()
+            except Exception as e:
+                print(f"Error closing Redis: {e}")
         
-        print(f"🔌 {self.user.username} disconnected from game {self.game_id}")
+        print(f"{self.user.username} disconnected from game {self.game_id}")
     
     async def _redis_listener(self):
         """Listen for Redis pub/sub messages"""
@@ -80,12 +107,17 @@ class GameConsumer(AsyncWebsocketConsumer):
                     try:
                         data = json.loads(message['data'])
                         await self._handle_redis_event(data)
-                    except json.JSONDecodeError:
-                        print(f"❌ Failed to parse Redis message: {message['data']}")
+                    except json.JSONDecodeError as e:
+                        print(f"Failed to parse Redis message: {message['data']} - {e}")
+                    except Exception as e:
+                        print(f"Error handling Redis event: {e}")
+                        import traceback
+                        traceback.print_exc()
         except asyncio.CancelledError:
-            pass
+            print("🔌 Redis listener cancelled")
         except Exception as e:
-            print(f"❌ Redis listener error: {e}")
+            print(f"Redis listener error: {e}")
+            # Don't crash, just log and exit gracefully
     
     async def _handle_redis_event(self, event):
         """Handle incoming Redis events"""
@@ -184,21 +216,26 @@ class GameConsumer(AsyncWebsocketConsumer):
         to_square = payload.get('to')
         promotion = payload.get('promotion')
         
-        # Acquire distributed lock via Redis
-        lock_key = f"lock:game:{self.game_id}:move"
-        lock_acquired = await self.redis.set(lock_key, self.user.id, nx=True, ex=5)
+        # Add move attempt logging
+        print(f"Move attempt: {self.user.username} {from_square}->{to_square}")
         
-        if not lock_acquired:
-            await self.send(json.dumps({
-                'type': 'error',
-                'message': 'Move in progress, please wait'
-            }))
-            return
+        # Acquire distributed lock via Redis (with fallback)
+        if self.redis:
+            lock_key = f"lock:game:{self.game_id}:move"
+            lock_acquired = await self.redis.set(lock_key, self.user.id, nx=True, ex=5)
+            
+            if not lock_acquired:
+                await self.send(json.dumps({
+                    'type': 'error',
+                    'message': 'Move in progress, please wait'
+                }))
+                return
         
         try:
             game = await self.get_game()
             
             if not game or game.status != 'ongoing':
+                print(f"❌ Invalid game state: status={game.status if game else 'None'}")
                 await self.send(json.dumps({
                     'type': 'error',
                     'message': 'Invalid game state'
@@ -208,6 +245,7 @@ class GameConsumer(AsyncWebsocketConsumer):
             # Verify it's player's turn
             if (game.current_turn == 'white' and game.white_player.id != self.user.id) or \
                (game.current_turn == 'black' and game.black_player.id != self.user.id):
+                print(f"❌ Not player's turn: current={game.current_turn}, player={self.user.username}")
                 await self.send(json.dumps({
                     'type': 'error',
                     'message': 'Not your turn'
@@ -221,15 +259,29 @@ class GameConsumer(AsyncWebsocketConsumer):
             from .chess_engine import ChessEngine
             engine = ChessEngine(game.current_fen)
             
+            # Add detailed validation logging
+            print(f"Board state: turn={engine.turn}, FEN={game.current_fen[:50]}...")
+            
             if not engine.is_valid_move(from_square, to_square, promotion):
+                # Log WHY it's invalid
+                piece = engine.board.get(from_square)
+                print(f"   Invalid move rejected:")
+                print(f"   From: {from_square} -> To: {to_square}")
+                print(f"   Piece at source: {piece}")
+                print(f"   Engine turn: {engine.turn}")
+                print(f"   Moving color: {moving_color}")
+                print(f"   Player: {self.user.username}")
+                
                 await self.send(json.dumps({
                     'type': 'error',
-                    'message': 'Invalid move'
+                    'message': f'Invalid move: {from_square} to {to_square}'
                 }))
                 return
             
             # Execute move in engine
             result = engine.make_move(from_square, to_square, promotion)
+            
+            print(f"Move executed: {moving_color} {from_square}->{to_square} = {result['notation']}")
             
             # Add time increment to player who just moved
             if moving_color == 'white':
@@ -249,7 +301,7 @@ class GameConsumer(AsyncWebsocketConsumer):
                 game.black_time_left
             )
             
-            # Publish move event to Redis
+            # FIX: Publish move event to Redis (with fallback)
             move_event = {
                 'type': 'move_made',
                 'move': {
@@ -266,17 +318,27 @@ class GameConsumer(AsyncWebsocketConsumer):
                     'timestamp': timezone.now().isoformat(),
                     'sequence': game.move_count,
                 },
+                'fen': result['fen'],  # Add top-level FEN
                 'white_time': game.white_time_left,
                 'black_time': game.black_time_left,
             }
             
-            # Publish to Redis (all subscribers will receive)
-            await self.redis.publish(self.game_channel, json.dumps(move_event))
+            # Publish to Redis if available
+            if self.redis:
+                await self.redis.publish(self.game_channel, json.dumps(move_event))
+                print(f"Move published to Redis: {moving_color} {from_square}->{to_square}")
             
-            print(f"✅ Move published: {moving_color} {from_square}->{to_square}")
+            # Also broadcast via channel layer (fallback)
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'broadcast_move',
+                    'event': move_event
+                }
+            )
             
         except Exception as e:
-            print(f"❌ Move error: {e}")
+            print(f"Move error: {e}")
             import traceback
             traceback.print_exc()
             await self.send(json.dumps({
@@ -285,7 +347,8 @@ class GameConsumer(AsyncWebsocketConsumer):
             }))
         finally:
             # Release lock
-            await self.redis.delete(lock_key)
+            if self.redis:
+                await self.redis.delete(lock_key)
     
     async def handle_chat(self, payload):
         """Broadcast chat message via Redis"""

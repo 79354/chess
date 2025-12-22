@@ -50,6 +50,7 @@ function Game() {
   const [pendingMove, setPendingMove] = useState(null);
   const [drawOffer, setDrawOffer] = useState(null);
   const [showDrawOfferModal, setShowDrawOfferModal] = useState(false);
+  const [moveInProgress, setMoveInProgress] = useState(false);
   
   // UI feedback
   const [error, setError] = useState(null);
@@ -84,7 +85,7 @@ function Game() {
       setIsSpectator(false);
     } else {
       setIsSpectator(true);
-      setPlayerColor('white'); // spectators see from white's perspective
+      setPlayerColor('white');
     }
 
     // Load board from FEN
@@ -96,7 +97,7 @@ function Game() {
     setBlackTime(data.black_time || data.black_time_left);
     setTimeIncrement(data.increment || 0);
 
-    // Load moves history (SERVER FORMAT)
+    // Load moves history
     const serverMoves = (data.moves || []).map(m => ({
       from: m.from,
       to: m.to,
@@ -143,7 +144,10 @@ function Game() {
     const moveData = data.move;
     if (!moveData) return;
     
-    // 1. Remove optimistic moves, add confirmed server move
+    // ✅ Clear move-in-progress flag
+    setMoveInProgress(false);
+    
+    // Remove optimistic moves, add confirmed server move
     setMoves(prev => {
       const confirmed = prev.filter(m => !m.optimistic);
       return [...confirmed, {
@@ -158,17 +162,18 @@ function Game() {
       }];
     });
     
-    // 2. Update board from server FEN
+    // ✅ ALWAYS load board from server FEN (authoritative)
     if (data.fen || moveData.fen) {
       const newBoard = new Board(data.fen || moveData.fen);
       setBoard(newBoard);
+      console.log('📥 Board updated from server FEN, turn:', newBoard.turn);
     }
     
-    // 3. Update clocks FROM SERVER
+    // Update clocks FROM SERVER
     if (data.white_time !== undefined) setWhiteTime(data.white_time);
     if (data.black_time !== undefined) setBlackTime(data.black_time);
     
-    // 4. Update captured pieces
+    // Update captured pieces
     if (moveData.captured) {
       setCapturedPieces(prev => ({
         ...prev,
@@ -176,12 +181,12 @@ function Game() {
       }));
     }
     
-    // 5. Update game state
+    // Update game state - use board.turn from FEN
     setGameState(prev => ({
       ...prev,
       status: moveData.status || data.status || prev.status,
-      turn: prev.turn === 'white' ? 'black' : 'white',
-      check: moveData.is_check ? (prev.turn === 'white' ? 'black' : 'white') : null,
+      turn: moveData.color === 'white' ? 'black' : 'white',
+      check: moveData.is_check ? (moveData.color === 'white' ? 'black' : 'white') : null,
       lastMove: { from: moveData.from, to: moveData.to },
       winner: moveData.winner || data.winner || prev.winner,
     }));
@@ -190,13 +195,11 @@ function Game() {
   }, []);
 
   const handleClockSync = useCallback((data) => {
-    // Backend sends clock updates every second
     setWhiteTime(data.white_time);
     setBlackTime(data.black_time);
   }, []);
 
   const handleStateSnapshot = useCallback((data) => {
-    // When jumping to a specific move
     const newBoard = new Board(data.fen);
     setBoard(newBoard);
     
@@ -222,7 +225,6 @@ function Game() {
       termination: data.reason || data.termination,
     }));
 
-    // Show rating changes if available
     if (data.rating_changes) {
       console.log('📊 Rating changes:', data.rating_changes);
     }
@@ -241,6 +243,18 @@ function Game() {
     setShowDrawOfferModal(false);
     setError('Draw offer was declined');
     setTimeout(() => setError(null), 3000);
+  }, []);
+
+  const handleMoveError = useCallback((errorMessage) => {
+    console.error('❌ Move error:', errorMessage);
+    setMoveInProgress(false);
+    setError(errorMessage);
+    setTimeout(() => setError(null), 5000);
+    
+    // Reload board from server to fix any desync
+    if (send) {
+      send({ type: 'join_game' });
+    }
   }, []);
 
   const handleWebSocketMessage = useCallback((data) => {
@@ -274,9 +288,7 @@ function Game() {
         }
         break;
       case 'error':
-        console.error('❌ Server error:', data.message);
-        setError(data.message);
-        setTimeout(() => setError(null), 5000);
+        handleMoveError(data.message);
         break;
       default:
         console.warn('⚠️ Unknown message type:', data.type);
@@ -289,6 +301,7 @@ function Game() {
     handleGameEnded,
     handleDrawOffer,
     handleDrawDeclined,
+    handleMoveError,
     chatMessageHandler,
   ]);
 
@@ -314,7 +327,7 @@ function Game() {
     }
   }, [navigate]);
 
-  const { isConnected, send, error: wsError } = useWebSocket(
+  const { isConnected, send } = useWebSocket(
     `/ws/game/${gameId}/`,
     {
       onOpen: handleWsOpen,
@@ -336,50 +349,10 @@ function Game() {
   }, [isConnected, send]);
 
   // =================================================================
-  // GAME LOGIC
+  // GAME LOGIC - ✅ FIXED ORDER (executeMove BEFORE handleMove)
   // =================================================================
 
-  const handleMove = useCallback((from, to) => {
-    if (isSpectator || gameState.status !== 'ongoing') {
-      console.log('🚫 Cannot move - spectator or game not ongoing');
-      return;
-    }
-    
-    if (board.turn !== playerColor) {
-      console.log('🚫 Not your turn');
-      return;
-    }
-
-    const piece = board.getPiece(from);
-    if (!piece || piece.color !== playerColor) {
-      console.log('🚫 Invalid piece selection');
-      return;
-    }
-
-    // Check for pawn promotion
-    if (piece.type === 'pawn') {
-      const toCoord = board.squareToCoordinate(to);
-      const promotionRank = piece.color === 'white' ? 7 : 0;
-      
-      if (toCoord.rank === promotionRank) {
-        setPendingMove({ from, to });
-        setShowPromotionModal(true);
-        return;
-      }
-    }
-
-    executeMove(from, to, null);
-  }, [isSpectator, gameState.status, board, playerColor]);
-
-  const handlePromotion = useCallback((promotionPiece) => {
-    setShowPromotionModal(false);
-    if (pendingMove) {
-      executeMove(pendingMove.from, pendingMove.to, promotionPiece);
-      setPendingMove(null);
-    }
-  }, [pendingMove]);
-
-  const executeMove = useCallback((from, to, promotion) => {
+  const executeMove = useCallback((from, to, promotion = null) => {
     console.log('🎯 Executing move:', from, to, promotion);
 
     // Validate move first
@@ -389,12 +362,15 @@ function Game() {
       return;
     }
 
+    // ✅ Set move in progress IMMEDIATELY
+    setMoveInProgress(true);
+
     const piece = board.getPiece(from);
     const capturedPiece = board.getPiece(to);
 
-    // Create optimistic local update
+    // ✅ Create optimistic update WITHOUT switching turn
     const tempBoard = board.clone();
-    const tempPiece = tempBoard.getPiece(from);
+    const tempPiece = { ...tempBoard.getPiece(from) };
     
     if (promotion && tempPiece.type === 'pawn') {
       tempPiece.type = promotion;
@@ -402,7 +378,7 @@ function Game() {
     
     tempBoard.board[to] = tempPiece;
     delete tempBoard.board[from];
-    tempBoard.turn = tempBoard.turn === 'white' ? 'black' : 'white';
+    // ❌ DON'T switch turn - let server do it
     
     setBoard(tempBoard);
 
@@ -443,6 +419,52 @@ function Game() {
       });
     }
   }, [board, validator, send]);
+
+  const handleMove = useCallback((from, to) => {
+    // ✅ Prevent rapid moves
+    if (moveInProgress) {
+      console.log('⏳ Wait for previous move to complete');
+      return;
+    }
+
+    if (isSpectator || gameState.status !== 'ongoing') {
+      console.log('🚫 Cannot move - spectator or game not ongoing');
+      return;
+    }
+    
+    if (board.turn !== playerColor) {
+      console.log('🚫 Not your turn - Board turn:', board.turn, 'Your color:', playerColor);
+      return;
+    }
+
+    const piece = board.getPiece(from);
+    if (!piece || piece.color !== playerColor) {
+      console.log('🚫 Invalid piece selection');
+      return;
+    }
+
+    // Check for pawn promotion
+    if (piece.type === 'pawn') {
+      const toCoord = board.squareToCoordinate(to);
+      const promotionRank = piece.color === 'white' ? 7 : 0;
+      
+      if (toCoord.rank === promotionRank) {
+        setPendingMove({ from, to });
+        setShowPromotionModal(true);
+        return;
+      }
+    }
+
+    executeMove(from, to, null);
+  }, [moveInProgress, isSpectator, gameState.status, board, playerColor, executeMove]);
+
+  const handlePromotion = useCallback((promotionPiece) => {
+    setShowPromotionModal(false);
+    if (pendingMove) {
+      executeMove(pendingMove.from, pendingMove.to, promotionPiece);
+      setPendingMove(null);
+    }
+  }, [pendingMove, executeMove]);
 
   const handleMoveClick = useCallback((index) => {
     if (send) {
@@ -512,7 +534,6 @@ function Game() {
 
   return (
     <div className="container mx-auto max-w-7xl h-[calc(100vh-150px)]">
-      {/* Connection Error */}
       {connectionError && (
         <div className="fixed top-20 right-6 bg-orange-500/90 text-white px-6 py-3 rounded-lg shadow-lg z-50">
           {connectionError}
@@ -520,7 +541,6 @@ function Game() {
         </div>
       )}
 
-      {/* Move Error */}
       {error && (
         <div className="fixed top-20 right-6 bg-red-500/90 text-white px-6 py-3 rounded-lg shadow-lg z-50">
           {error}
@@ -529,7 +549,6 @@ function Game() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_280px] gap-4 h-full">
-        {/* Left Sidebar - Opponent */}
         <div className="space-y-6">
           <GameClock
             initialTime={playerColor === 'white' ? blackTime : whiteTime}
@@ -559,7 +578,6 @@ function Game() {
           />
         </div>
 
-        {/* Center - Board */}
         <div className="flex items-center justify-center min-h-0 h-full">
           <div className="w-full h-full max-w-[min(90vh,90vw)] max-h-[min(90vh,90vw)]">
             <ChessBoard
@@ -579,7 +597,6 @@ function Game() {
           </div>
         </div>
 
-        {/* Right Sidebar - Player */}
         <div className="space-y-6">
           <GameClock
             initialTime={playerColor === 'white' ? whiteTime : blackTime}
@@ -615,7 +632,6 @@ function Game() {
         </div>
       </div>
 
-      {/* Draw Offer Modal */}
       {showDrawOfferModal && (
         <DrawOfferModal
           isOpen={showDrawOfferModal}
@@ -625,7 +641,6 @@ function Game() {
         />
       )}
 
-      {/* Promotion Modal */}
       <PromotionModal
         isOpen={showPromotionModal}
         color={playerColor}
