@@ -14,8 +14,7 @@ from .serializers import (
 )
 from django.db.models import Q, Count, Prefetch
 from django.contrib.postgres.search import TrigramSimilarity
-#from .models import User, Friend, FriendRequest
-from .models import User, Friendship, FriendRequest
+from .models import User, Friend, FriendRequest
 
 
 User = get_user_model()
@@ -327,7 +326,7 @@ def search_users(request):
     current_user = request.user
     
     # Get user's existing friends and pending requests
-    friend_ids = Friendship.objects.filter(
+    friend_ids = Friend.objects.filter(
         Q(user=current_user) | Q(friend=current_user)
     ).values_list('friend_id', 'user_id')
     
@@ -416,17 +415,17 @@ def get_friends(request):
     user = request.user
     
     # Get all friend relationships
-    friends_as_user = Friendship.objects.filter(user=user).select_related('friend')
-    friends_as_friend = Friendship.objects.filter(friend=user).select_related('user')
+    friends_as_user = Friend.objects.filter(user=user).select_related('friend')
+    friends_as_friend = Friend.objects.filter(friend=user).select_related('user')
     
     friends = []
     
     for friendship in friends_as_user:
-        friend = friendship.friend
+        friend = Friend.friend
         friends.append(_serialize_friend(friend, user))
     
     for friendship in friends_as_friend:
-        friend = friendship.user
+        friend = Friend.user
         friends.append(_serialize_friend(friend, user))
     
     # Sort by online status, then by rating
@@ -513,7 +512,7 @@ def send_friend_request(request):
         }, status=status.HTTP_400_BAD_REQUEST)
     
     # Check if already friends
-    already_friends = Friendship.objects.filter(
+    already_friends = Friend.objects.filter(
         Q(user=sender, friend=receiver) |
         Q(user=receiver, friend=sender)
     ).exists()
@@ -540,7 +539,7 @@ def send_friend_request(request):
             existing_request.status = 'accepted'
             existing_request.save()
             
-            Friendship.objects.create(user=sender, friend=receiver)
+            Friend.objects.create(user=sender, friend=receiver)
             
             # Notify both users
             _notify_friend_request_accepted(sender, receiver)
@@ -595,7 +594,7 @@ def accept_friend_request(request):
     friend_request.save()
     
     # Create friendship
-    Friendship.objects.create(user=request.user, friend=friend_request.sender)
+    Friend.objects.create(user=request.user, friend=friend_request.sender)
     
     # Notify sender
     _notify_friend_request_accepted(friend_request.sender, request.user)
@@ -653,7 +652,7 @@ def remove_friend(request, user_id):
         }, status=status.HTTP_404_NOT_FOUND)
     
     # Delete friendship
-    deleted = Friendship.objects.filter(
+    deleted = Friend.objects.filter(
         Q(user=request.user, friend=friend) |
         Q(user=friend, friend=request.user)
     ).delete()
