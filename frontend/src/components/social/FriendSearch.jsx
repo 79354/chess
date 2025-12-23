@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, UserPlus, UserCheck, Clock, X } from 'lucide-react';
+import { Search, UserPlus, UserCheck, Clock, X, Swords, Eye } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 
 function FriendSearch() {
@@ -10,11 +11,18 @@ function FriendSearch() {
   const [friendRequests, setFriendRequests] = useState({ received: [], sent: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showChallengeModal, setShowChallengeModal] = useState(false);
+  const [selectedFriend, setSelectedFriend] = useState(null);
+  const navigate = useNavigate();
 
   // Load friends and requests on mount
   useEffect(() => {
     loadFriends();
     loadFriendRequests();
+    
+    // Refresh friends list every 30 seconds
+    const interval = setInterval(loadFriends, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const loadFriends = async () => {
@@ -77,7 +85,6 @@ function FriendSearch() {
     try {
       await api.post('/auth/friends/request/', { username });
       
-      // Update search results
       setSearchResults(prev =>
         prev.map(user =>
           user.username === username
@@ -86,7 +93,6 @@ function FriendSearch() {
         )
       );
 
-      // Reload friend requests
       loadFriendRequests();
     } catch (err) {
       setError(err.message || 'Failed to send friend request');
@@ -116,7 +122,7 @@ function FriendSearch() {
   };
 
   const removeFriend = async (userId) => {
-    if (!confirm('Are you sure you want to remove this friend?')) {
+    if (!window.confirm('Are you sure you want to remove this friend?')) {
       return;
     }
 
@@ -126,6 +132,19 @@ function FriendSearch() {
     } catch (err) {
       setError('Failed to remove friend');
       setTimeout(() => setError(null), 3000);
+    }
+  };
+
+  // NEW: Challenge friend
+  const handleChallengeClick = (friend) => {
+    setSelectedFriend(friend);
+    setShowChallengeModal(true);
+  };
+
+  // NEW: Spectate friend's game
+  const handleSpectateClick = (friend) => {
+    if (friend.game_id) {
+      navigate(`/game/${friend.game_id}`);
     }
   };
 
@@ -251,18 +270,56 @@ function FriendSearch() {
                     </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => removeFriend(friend.id)}
-                  className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
-                  title="Remove friend"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                
+                {/* Action buttons */}
+                <div className="flex items-center space-x-2">
+                  {friend.in_game ? (
+                    <button
+                      onClick={() => handleSpectateClick(friend)}
+                      className="p-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded-lg transition-colors"
+                      title="Spectate game"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
+                  ) : friend.is_online ? (
+                    <button
+                      onClick={() => handleChallengeClick(friend)}
+                      className="p-2 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg transition-colors"
+                      title="Challenge to a game"
+                    >
+                      <Swords className="w-4 h-4" />
+                    </button>
+                  ) : null}
+                  
+                  <button
+                    onClick={() => removeFriend(friend.id)}
+                    className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                    title="Remove friend"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Challenge Modal */}
+      {showChallengeModal && selectedFriend && (
+        <ChallengeModal
+          friend={selectedFriend}
+          onClose={() => {
+            setShowChallengeModal(false);
+            setSelectedFriend(null);
+          }}
+          onSuccess={() => {
+            setShowChallengeModal(false);
+            setSelectedFriend(null);
+            // Optionally navigate to pending challenges page
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -318,6 +375,101 @@ function UserCard({ user, onSendRequest, onRemoveFriend }) {
         </div>
       </div>
       {renderActionButton()}
+    </div>
+  );
+}
+
+// NEW: Challenge Modal Component
+function ChallengeModal({ friend, onClose, onSuccess }) {
+  const [selectedTimeControl, setSelectedTimeControl] = useState('10+0');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+
+  const timeControls = [
+    { value: '1+0', label: '1 min' },
+    { value: '3+0', label: '3 min' },
+    { value: '3+2', label: '3+2' },
+    { value: '5+0', label: '5 min' },
+    { value: '10+0', label: '10 min' },
+    { value: '10+5', label: '10+5' },
+    { value: '15+10', label: '15+10' },
+    { value: '30+0', label: '30 min' },
+  ];
+
+  const handleSendChallenge = async () => {
+    setSending(true);
+    setError(null);
+
+    try {
+      await api.post('/game/challenges/send/', {
+        friend_id: friend.id,
+        time_control: selectedTimeControl,
+      });
+
+      onSuccess();
+    } catch (err) {
+      setError(err.message || 'Failed to send challenge');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border-2 border-purple-500/50 shadow-2xl p-8 max-w-md w-full mx-4">
+        <div className="text-center mb-6">
+          <Swords className="w-16 h-16 text-purple-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-white mb-2">
+            Challenge {friend.username}
+          </h2>
+          <p className="text-white/60">
+            Choose a time control for your game
+          </p>
+        </div>
+
+        {error && (
+          <div className="bg-red-500/20 border border-red-500 rounded-lg p-3 mb-4 text-white text-sm">
+            {error}
+          </div>
+        )}
+
+        {/* Time Control Selection */}
+        <div className="grid grid-cols-4 gap-2 mb-6">
+          {timeControls.map((tc) => (
+            <button
+              key={tc.value}
+              onClick={() => setSelectedTimeControl(tc.value)}
+              className={`
+                p-3 rounded-lg border-2 transition-all
+                ${selectedTimeControl === tc.value
+                  ? 'bg-purple-600 border-purple-500 text-white'
+                  : 'bg-white/5 border-white/10 text-white/80 hover:border-white/30'
+                }
+              `}
+            >
+              <div className="text-sm font-semibold">{tc.label}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* Actions */}
+        <div className="flex space-x-3">
+          <button
+            onClick={onClose}
+            disabled={sending}
+            className="flex-1 px-6 py-3 rounded-lg font-semibold bg-white/10 hover:bg-white/20 text-white transition-all disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSendChallenge}
+            disabled={sending}
+            className="flex-1 px-6 py-3 rounded-lg font-semibold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white transition-all disabled:opacity-50"
+          >
+            {sending ? 'Sending...' : 'Send Challenge'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

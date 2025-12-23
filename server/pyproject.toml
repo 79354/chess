@@ -10,6 +10,7 @@ dependencies = [
     "Django==5.0.1",
     "djangorestframework==3.14.0",
 
+    # Media
     "pillow==12.0.0",
 
     # JWT Authentication
@@ -20,13 +21,16 @@ dependencies = [
     "google-auth-oauthlib==1.1.0",
     "google-auth-httplib2==0.1.1",
 
-    # Redis (for caching and channels)
+    # Redis / Cache / Broker
+    "redis[hiredis]==5.0.1",
     "django-redis==5.4.0",
-    "redis==5.0.0",
-    "redis[hiredis]>=5.0.0",
+
+    # Celery
+    "celery[redis]>=5.4.0",
+    "django-celery-beat>=2.6.0",
 
     # Database
-    "psycopg2-binary==2.9.9", # PostgreSQL
+    "psycopg2-binary==2.9.9",
     "dj-database-url==2.1.0",
 
     # WebSockets
