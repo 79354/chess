@@ -4,7 +4,7 @@ import Navbar from './components/layout/NavBar';
 import Sidebar from './components/layout/Sidebar';
 import Footer from './components/layout/Footer';
 import ProtectedRoute from './components/ProtectedRoute';
-
+import BotGame from './pages/BotGame';
 import Register from "./pages/Register";
 import Login from "./pages/Login";
 import NotFound from './pages/NotFound';
@@ -59,6 +59,7 @@ function MainLayout() {
             <Route path="/spectate" element={<Spectate />} />
             <Route path="/profile/:username" element={<Profile />} />
             <Route path="/404" element={<NotFound />} />
+            <Route path="/bot" element={<BotGame />} />
             <Route path="*" element={<Navigate to="/404" replace />} />
           </Routes>
         </main>
