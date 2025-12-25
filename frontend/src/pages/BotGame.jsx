@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Cpu, RotateCcw, Home, Loader2 } from "lucide-react";
 
@@ -14,6 +14,9 @@ import botService from "../services/botService";
 function BotGame() {
   const navigate = useNavigate();
   const { gameId: urlGameId } = useParams();
+
+  // Use ref to track gameId for cleanup
+  const gameIdRef = useRef(null);
 
   // Game session
   const [gameId, setGameId] = useState(urlGameId || null);
@@ -36,7 +39,6 @@ function BotGame() {
   const [gameStarted, setGameStarted] = useState(false);
   const [botThinking, setBotThinking] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
 
   // UI state
   const [moves, setMoves] = useState([]);
@@ -49,17 +51,25 @@ function BotGame() {
   const [pendingMove, setPendingMove] = useState(null);
   const [error, setError] = useState(null);
 
+  // Update ref whenever gameId changes
+  useEffect(() => {
+    gameIdRef.current = gameId;
+  }, [gameId]);
+
   // Load existing game if gameId exists in URL
   useEffect(() => {
-    if (urlGameId && !gameLoaded) {
+    const isValidUUID = urlGameId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(urlGameId);
+    
+    if (isValidUUID && !gameLoaded) {
       loadExistingGame(urlGameId);
     } else if (!urlGameId) {
       // No game ID in URL, show difficulty selection
       setGameLoaded(true);
     }
-  }, [urlGameId]);
+  }, [urlGameId, gameLoaded]);
 
   const loadExistingGame = async (gId) => {
+    setIsInitializing(true);
     try {
       const result = await botService.getGame(gId);
       if (result.success) {
@@ -81,15 +91,20 @@ function BotGame() {
           lastMove: null,
         });
 
+        setGameStarted(true);
         setGameLoaded(true);
       } else {
         setError("Game not found");
-        setTimeout(() => navigate("/"), 2000);
+        setGameLoaded(true);
+        setGameStarted(false);
       }
     } catch (err) {
       console.error("Load game error:", err);
       setError("Failed to load game");
-      setTimeout(() => navigate("/"), 2000);
+      setGameLoaded(true);
+      setGameStarted(false);
+    } finally {
+      setIsInitializing(false);
     }
   };
 
@@ -98,14 +113,17 @@ function BotGame() {
     setValidator(new MoveValidator(board));
   }, [board]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount only (not on gameId change)
   useEffect(() => {
     return () => {
-      if (gameId) {
-        botService.deleteGame(gameId);
+      const currentGameId = gameIdRef.current;
+      if (currentGameId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentGameId)) {
+        botService.deleteGame(currentGameId).catch(() => {
+          // Silently fail - game might already be deleted
+        });
       }
     };
-  }, [gameId]);
+  }, []); // Empty dependency array - only runs on unmount
 
   const executeMove = useCallback(
     (from, to, promotion = null) => {
@@ -270,13 +288,12 @@ function BotGame() {
       );
 
       if (result.success) {
-        const createdGameId = result.game_id; // Store in variable, not state yet
+        const createdGameId = result.game_id;
 
         setGameId(createdGameId);
         setDifficulty(selectedDifficulty);
         setPlayerColor(selectedColor);
         setGameStarted(true);
-        setShowSettings(false);
 
         const newBoard = new Board();
         if (result.starting_fen) {
@@ -296,6 +313,9 @@ function BotGame() {
         setCurrentMoveIndex(-1);
         setCapturedPieces({ white: [], black: [] });
         setBotThinking(false);
+
+        // Navigate to the new game URL
+        navigate(`/bot/${createdGameId}`, { replace: true });
 
         // If bot moves first
         if (result.bot_first_move) {
@@ -318,13 +338,14 @@ function BotGame() {
   };
 
   const resetGame = async () => {
-    if (gameId) {
-      await botService.deleteGame(gameId);
+    // Delete the current game if it exists
+    if (gameId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(gameId)) {
+      await botService.deleteGame(gameId).catch(() => {});
     }
 
+    // Reset all state
     setGameId(null);
     setGameStarted(false);
-    setShowSettings(true);
     setBoard(new Board());
     setMoves([]);
     setCapturedPieces({ white: [], black: [] });
@@ -335,6 +356,10 @@ function BotGame() {
       winner: null,
     });
     setError(null);
+    setGameLoaded(false);
+
+    // Navigate to clean /bot route
+    navigate('/bot', { replace: true });
   };
 
   const getValidMoves = useCallback(
@@ -344,8 +369,19 @@ function BotGame() {
     [validator]
   );
 
-  // Difficulty selection screen
-  // Settings screen - shown before game starts
+  // Loading state while checking for existing game
+  if (isInitializing) {
+    return (
+      <div className="container mx-auto max-w-4xl h-screen flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 text-purple-400 animate-spin mx-auto mb-4" />
+          <p className="text-white/60">Loading game...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Settings screen - shown when no game is started
   if (!gameStarted) {
     return (
       <div className="container mx-auto max-w-4xl h-screen flex items-center justify-center">
