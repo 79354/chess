@@ -2,6 +2,7 @@ from .board import Board
 from .searcher import Searcher
 from .move import Move
 from .opening_book import OpeningBook
+from .book_loader import load_opening_book
 import time
 
 """
@@ -12,7 +13,13 @@ class Bot:
         """Initialize bot"""
         self.board = Board()
         self.searcher = Searcher(self.board)
-        self.opening_book = OpeningBook() if use_opening_book else None
+        
+        # Load opening book from book.txt
+        if use_opening_book:
+            book_data = load_opening_book()
+            self.opening_book = OpeningBook(book_data) if book_data else None
+        else:
+            self.opening_book = None
         
         # Configuration
         self.use_max_think_time = False
