@@ -42,21 +42,30 @@ class BotService {
    * @returns {Promise<{success: boolean, bot_move: string, new_fen: string, game_over: boolean}>}
    */
   async makeMove(gameId, move) {
+    console.log(`🔄 Bot API: Making move ${move} for game ${gameId}`);
     try {
-      const response = await fetch(`${BOT_API_URL}/api/bot/games/${gameId}/move/`, {
+      const url = `${BOT_API_URL}/api/bot/games/${gameId}/move/`;
+      console.log('📍 Request URL:', url);
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ move })
       });
       
+      console.log('📊 Response status:', response.status);
+      
       if (!response.ok) {
         const error = await response.json();
+        console.error('❌ Bot API error:', error);
         throw new Error(error.error || 'Move failed');
       }
       
-      return await response.json();
+      const data = await response.json();
+      console.log('✅ Bot API success:', data);
+      return data;
     } catch (error) {
-      console.error('Make move error:', error);
+      console.error('💥 Make move error:', error);
       throw error;
     }
   }
