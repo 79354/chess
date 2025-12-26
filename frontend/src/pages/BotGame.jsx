@@ -6,7 +6,7 @@ import ChessBoard from "../components/chess/ChessBoard";
 import MoveHistory from "../components/chess/MoveHistory";
 import CapturedPieces from "../components/chess/CapturedPieces";
 import PromotionModal from "../components/chess/PromotionModal";
-
+import CoordinateConverter from "../chess/CoordinateConverter";
 import Board from "../chess/Board";
 import MoveValidator from "../chess/MoveValidator";
 import botService from "../services/botService";
@@ -212,39 +212,78 @@ function BotGame() {
     [gameId, botThinking, gameState, playerColor, board]
   );
 
+  // Replace the executeMoveAndGetBotResponse function in BotGame.jsx
+
   const executeMoveAndGetBotResponse = async (from, to, promotion = null) => {
     setBotThinking(true);
     setError(null);
-
+  
+    console.log('🎯 Player move attempt:', { from, to, promotion, gameId, turn: gameState.turn });
+  
     try {
-      // Validate and execute player move locally first
-      const moveSuccess = executeMove(from, to, promotion);
-      if (!moveSuccess) {
+      // DON'T execute locally first - let the backend be the source of truth
+      // Just validate it's legal
+      if (!validator.isValidMove(from, to, promotion)) {
+        setError("Invalid move");
         setBotThinking(false);
         return;
       }
-
-      // Send move to backend and get bot response
+  
+      // Send move to backend
       const move = from + to + (promotion || "");
+      console.log('📤 Sending to backend:', move);
+      
       const result = await botService.makeMove(gameId, move);
-
+      console.log('📊 Backend response:', result);
+  
       if (result.success) {
-        // Add artificial delay for UX
-        await new Promise((resolve) => setTimeout(resolve, 300));
-
-        // Apply bot move if provided
+        // Load the NEW board state from backend (this includes both player and bot moves)
+        const newBoard = new Board();
+        newBoard.loadFen(result.new_fen);
+        setBoard(newBoard);
+        setValidator(new MoveValidator(newBoard));
+  
+        // Update game state
+        setGameState(prev => ({
+          ...prev,
+          turn: newBoard.turn,
+          status: result.game_over ? "finished" : "ongoing",
+          winner: result.winner,
+          lastMove: result.bot_move ? {
+            from: result.bot_move.substring(0, 2),
+            to: result.bot_move.substring(2, 4)
+          } : { from, to }
+        }));
+  
+        // Update move history
+        const playerMove = {
+          from,
+          to,
+          piece: board.getPiece(from)?.type,
+          notation: `${from}-${to}${promotion ? "=" + promotion : ""}`,
+          color: playerColor,
+          timestamp: Date.now(),
+        };
+        
+        const newMoves = [playerMove];
+        
         if (result.bot_move) {
-          const botMove = result.bot_move;
-          const botFrom = botMove.substring(0, 2);
-          const botTo = botMove.substring(2, 4);
-          const botPromo = botMove.length > 4 ? botMove[4] : null;
-
-          executeMove(botFrom, botTo, botPromo);
+          const botMove = {
+            from: result.bot_move.substring(0, 2),
+            to: result.bot_move.substring(2, 4),
+            notation: result.bot_move,
+            color: playerColor === 'white' ? 'black' : 'white',
+            timestamp: Date.now(),
+          };
+          newMoves.push(botMove);
         }
-
+  
+        setMoves(prev => [...prev, ...newMoves]);
+        setCurrentMoveIndex(prev => prev + newMoves.length);
+  
         // Check game over
         if (result.game_over) {
-          setGameState((prev) => ({
+          setGameState(prev => ({
             ...prev,
             status: "finished",
             winner: result.winner,
@@ -255,13 +294,12 @@ function BotGame() {
         setError(result.error || "Failed to get bot response");
       }
     } catch (err) {
-      console.error("Move error:", err);
+      console.error("❌ Move error:", err);
       setError("Move failed: " + err.message);
     } finally {
       setBotThinking(false);
     }
   };
-
   const handlePromotion = useCallback(
     async (promotionPiece) => {
       setShowPromotionModal(false);
