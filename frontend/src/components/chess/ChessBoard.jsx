@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import "../../styles/Board.css";
 import RatingChangeDisplay from "./RatingChangeDisplay";
 
@@ -6,14 +7,10 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [validMoves, setValidMoves] = useState([]);
   const [lastMove, setLastMove] = useState(null);
-  const [draggedPiece, setDraggedPiece] = useState(null);
-  const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
-  const [animatingMove, setAnimatingMove] = useState(null);
-  const [pieceSet, setPieceSet] = useState('cburnett'); // Can be: cburnett, alpha, etc
-  const [boardTheme, setBoardTheme] = useState('brown'); // Can be: brown, blue, green, etc
+  const [pieceSet, setPieceSet] = useState('cburnett');
+  const [boardTheme, setBoardTheme] = useState('brown');
   const boardRef = useRef(null);
 
-  // FIX: Flip BOTH files AND ranks for black
   const files = playerColor === "black" 
     ? ["h", "g", "f", "e", "d", "c", "b", "a"]
     : ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -22,28 +19,28 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
     ? [1, 2, 3, 4, 5, 6, 7, 8]
     : [8, 7, 6, 5, 4, 3, 2, 1];
 
-  // Prevent page scroll during drag
-  useEffect(() => {
-    const preventScroll = (e) => {
-      if (draggedPiece) {
-        e.preventDefault();
-      }
-    };
-    
-    document.addEventListener('touchmove', preventScroll, { passive: false });
-    document.addEventListener('wheel', preventScroll, { passive: false });
-    
-    return () => {
-      document.removeEventListener('touchmove', preventScroll);
-      document.removeEventListener('wheel', preventScroll);
-    };
-  }, [draggedPiece]);
-
   useEffect(() => {
     if (gameState?.lastMove) {
       setLastMove(gameState.lastMove);
     }
   }, [gameState]);
+
+  useEffect(() => {
+    // Prevent scrolling during game
+    const preventScroll = (e) => {
+      if (selectedSquare || validMoves.length > 0) {
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('touchmove', preventScroll, { passive: false });
+    document.addEventListener('wheel', preventScroll, { passive: false });
+
+    return () => {
+      document.removeEventListener('touchmove', preventScroll);
+      document.removeEventListener('wheel', preventScroll);
+    };
+  }, [selectedSquare, validMoves]);
 
   const handleSquareClick = (file, rank) => {
     if (isSpectator || gameState?.status !== 'ongoing') return;
@@ -53,8 +50,7 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
 
     if (selectedSquare) {
       if (validMoves.includes(square)) {
-        animateMove(selectedSquare, square);
-        setTimeout(() => onMove(selectedSquare, square), 50); // Small delay for animation
+        onMove(selectedSquare, square);
         setSelectedSquare(null);
         setValidMoves([]);
       } else if (piece && piece.color === playerColor) {
@@ -72,83 +68,6 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
         setValidMoves(moves);
       }
     }
-  };
-
-  const animateMove = (from, to) => {
-    setAnimatingMove({ from, to, timestamp: Date.now() });
-    setTimeout(() => setAnimatingMove(null), 300);
-  };
-
-  // Improved drag handlers
-  const handleDragStart = (e, file, rank) => {
-    if (isSpectator || gameState?.status !== 'ongoing') {
-      e.preventDefault();
-      return;
-    }
-
-    const square = `${file}${rank}`;
-    const piece = gameState?.board?.[square];
-
-    if (!piece || piece.color !== playerColor || gameState.turn !== playerColor) {
-      e.preventDefault();
-      return;
-    }
-
-    // Get board rect and calculate piece offset
-    const boardRect = boardRef.current?.getBoundingClientRect();
-    const squareSize = boardRect ? boardRect.width / 8 : 80;
-    
-    const moves = getValidMoves ? getValidMoves(square) : [];
-    setDraggedPiece({ 
-      square, 
-      piece,
-      squareSize
-    });
-    setValidMoves(moves);
-    setSelectedSquare(square);
-
-    // Hide default drag image
-    const img = new Image();
-    img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
-    e.dataTransfer.setDragImage(img, 0, 0);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDrag = (e) => {
-    if (e.clientX === 0 && e.clientY === 0) return;
-    if (!draggedPiece) return;
-    
-    const squareSize = draggedPiece.squareSize || 80;
-    setDragPosition({ 
-      x: e.clientX - squareSize / 2, 
-      y: e.clientY - squareSize / 2
-    });
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDrop = (e, file, rank) => {
-    e.preventDefault();
-    if (!draggedPiece) return;
-
-    const toSquare = `${file}${rank}`;
-    if (validMoves.includes(toSquare)) {
-      animateMove(draggedPiece.square, toSquare);
-      setTimeout(() => onMove(draggedPiece.square, toSquare), 50);
-    }
-
-    setDraggedPiece(null);
-    setSelectedSquare(null);
-    setValidMoves([]);
-  };
-
-  const handleDragEnd = () => {
-    setDraggedPiece(null);
-    setSelectedSquare(null);
-    setValidMoves([]);
   };
 
   const getPieceAtSquare = (file, rank) => {
@@ -203,8 +122,6 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
               const isLight = (rankIdx + fileIdx) % 2 === 0;
               const piece = getPieceAtSquare(file, rank);
               const square = `${file}${rank}`;
-              const isDragging = draggedPiece?.square === square;
-              const isAnimating = animatingMove?.from === square || animatingMove?.to === square;
               const hasPieceOnValidMove = isSquareHighlighted(file, rank) && piece;
 
               return (
@@ -219,29 +136,71 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
                     ${isSquareLastMove(file, rank) ? 'last-move' : ''}
                     ${isSquareInCheck(file, rank) ? 'in-check' : ''}
                     ${isSpectator ? 'disabled' : ''}
-                    ${isAnimating ? 'animating' : ''}
                   `}
                   onClick={() => handleSquareClick(file, rank)}
-                  onDragOver={handleDragOver}
-                  onDrop={(e) => handleDrop(e, file, rank)}
                 >
-                  {piece && !isDragging && (
-                    <div
-                      className={`chess-piece ${isAnimating ? 'piece-moving' : ''}`}
-                      draggable={!isSpectator && piece.color === playerColor && gameState.turn === playerColor}
-                      onDragStart={(e) => handleDragStart(e, file, rank)}
-                      onDrag={handleDrag}
-                      onDragEnd={handleDragEnd}
-                    >
-                      <img 
-                        src={getPieceImage(piece)} 
-                        alt={`${piece.color} ${piece.type}`}
-                        draggable={false}
-                      />
-                    </div>
-                  )}
+                  <AnimatePresence>
+                    {piece && (
+                      <motion.div
+                        key={`${square}-${piece.type}-${piece.color}`}
+                        className="chess-piece"
+                        initial={false}
+                        drag={!isSpectator && piece.color === playerColor && gameState.turn === playerColor}
+                        dragSnapToOrigin={true}
+                        dragElastic={0}
+                        dragTransition={{ bounceStiffness: 600, bounceDamping: 20 }}
+                        whileDrag={{ 
+                          scale: 1.2, 
+                          zIndex: 1000,
+                          cursor: 'grabbing',
+                          filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.4))'
+                        }}
+                        onDragStart={() => {
+                          if (piece.color === playerColor && gameState.turn === playerColor) {
+                            setSelectedSquare(square);
+                            const moves = getValidMoves ? getValidMoves(square) : [];
+                            setValidMoves(moves);
+                          }
+                        }}
+                        onDragEnd={(event, info) => {
+                          if (!boardRef.current) return;
 
-                  {/* Coordinate labels */}
+                          const boardRect = boardRef.current.getBoundingClientRect();
+                          const squareSize = boardRect.width / 8;
+                          
+                          const dropX = event.clientX - boardRect.left;
+                          const dropY = event.clientY - boardRect.top;
+                          
+                          const dropFileIdx = Math.floor(dropX / squareSize);
+                          const dropRankIdx = Math.floor(dropY / squareSize);
+                          
+                          if (dropFileIdx >= 0 && dropFileIdx < 8 && dropRankIdx >= 0 && dropRankIdx < 8) {
+                            const targetFile = files[dropFileIdx];
+                            const targetRank = ranks[dropRankIdx];
+                            const targetSquare = `${targetFile}${targetRank}`;
+                            
+                            if (validMoves.includes(targetSquare)) {
+                              onMove(square, targetSquare);
+                            }
+                          }
+                          
+                          setSelectedSquare(null);
+                          setValidMoves([]);
+                        }}
+                        animate={lastMove?.to === square ? {
+                          scale: [1, 1.1, 1],
+                          transition: { duration: 0.3 }
+                        } : {}}
+                      >
+                        <img 
+                          src={getPieceImage(piece)} 
+                          alt={`${piece.color} ${piece.type}`}
+                          draggable={false}
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
                   {fileIdx === 0 && <span className="rank-label">{rank}</span>}
                   {rankIdx === ranks.length - 1 && <span className="file-label">{file}</span>}
                 </div>
@@ -250,39 +209,19 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
           )}
         </div>
 
-        {/* Dragging Piece Preview */}
-        {draggedPiece && dragPosition.x !== 0 && (
-          <div
-            className="dragging-piece"
-            style={{
-              position: 'fixed',
-              left: `${dragPosition.x}px`,
-              top: `${dragPosition.y}px`,
-              width: `${draggedPiece.squareSize}px`,
-              height: `${draggedPiece.squareSize}px`,
-              pointerEvents: 'none',
-              zIndex: 1000,
-              opacity: 0.8,
-              transform: 'translate(0, 0)',
-              transition: 'none'
-            }}
-          >
-            <img
-              src={getPieceImage(draggedPiece.piece)}
-              alt={`${draggedPiece.piece.color} ${draggedPiece.piece.type}`}
-              style={{ 
-                width: '100%', 
-                height: '100%',
-                filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.3))'
-              }}
-            />
-          </div>
-        )}
-
-        {/* Game Over Overlay */}
         {gameState?.status && gameState.status !== "ongoing" && (
-          <div className="game-over-overlay">
-            <div className="game-over-card">
+          <motion.div 
+            className="game-over-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.3 }}
+          >
+            <motion.div 
+              className="game-over-card"
+              initial={{ scale: 0.8, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            >
               <h2 className="game-over-title">
                 {gameState.status === "checkmate" && "Checkmate!"}
                 {gameState.status === "stalemate" && "Stalemate!"}
@@ -297,25 +236,32 @@ function ChessBoard({ gameState, onMove, isSpectator, playerColor, getValidMoves
               </p>
               
               {gameState.ratingChanges && <RatingChangeDisplay/>}
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         )}
       </div>
 
-      {/* Theme Selector (optional - can be moved to settings) */}
-      <div className="board-settings" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+      {/* Theme Selector - Fixed in Corner */}
+      <div 
+        className="fixed bottom-6 right-6 z-50 bg-slate-800/90 backdrop-blur-lg border border-white/20 rounded-xl p-4 shadow-2xl"
+        style={{ maxWidth: '200px' }}
+      >
+        <h4 className="text-white text-sm font-semibold mb-2">Board Theme</h4>
+        <select 
+          value={boardTheme} 
+          onChange={(e) => setBoardTheme(e.target.value)}
+          className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2 mb-2"
+        >
+          <option value="brown">Brown</option>
+          <option value="blue">Blue</option>
+          <option value="green">Green</option>
+        </select>
+        
+        <h4 className="text-white text-sm font-semibold mb-2">Piece Set</h4>
         <select 
           value={pieceSet} 
           onChange={(e) => setPieceSet(e.target.value)}
-          className="theme-select"
-          style={{
-            background: 'rgba(255,255,255,0.1)',
-            color: 'white',
-            border: '1px solid rgba(255,255,255,0.2)',
-            borderRadius: '0.5rem',
-            padding: '0.5rem',
-            fontSize: '0.875rem'
-          }}
+          className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2"
         >
           <option value="cburnett">Classic</option>
           <option value="alpha">Alpha</option>
