@@ -14,10 +14,12 @@ import PromotionModal from '../components/chess/PromotionModal';
 
 import Board from '../chess/Board';
 import MoveValidator from '../chess/MoveValidator';
+import useSound from '../hooks/useSound';
 
 function Game() {
   const { gameId } = useParams();
   const { user } = useAuth();
+  const { playMove, playCheckmate, preloadSounds } = useSound();
   const navigate = useNavigate();
 
   // Core game state
@@ -65,9 +67,11 @@ function Game() {
     setValidator(new MoveValidator(board));
   }, [board]);
 
-  // =================================================================
+  useEffect(() => {
+    preloadSounds();
+  }, [preloadSounds]);
+
   // WEBSOCKET MESSAGE HANDLERS
-  // =================================================================
 
   const handleGameState = useCallback((data) => {
     console.log('🎮 Initializing game state:', data);
@@ -143,8 +147,14 @@ function Game() {
     
     const moveData = data.move;
     if (!moveData) return;
+
+    // Play sound based on move type
+    playMove({
+      isCapture: moveData.captured,
+      isCheck: moveData.is_check
+    });
     
-    // ✅ Clear move-in-progress flag
+    // Clear move-in-progress flag
     setMoveInProgress(false);
     
     // Remove optimistic moves, add confirmed server move
@@ -218,6 +228,10 @@ function Game() {
   const handleGameEnded = useCallback((data) => {
     console.log('🏁 Game ended:', data);
     
+    if (data.status === 'checkmate') {
+      playCheckmate();
+    }
+
     setGameState(prev => ({
       ...prev,
       status: data.status,

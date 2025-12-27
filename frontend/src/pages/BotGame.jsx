@@ -691,14 +691,16 @@ function BotGame() {
               getValidMoves={getValidMoves}
             />
           </div>
-          <button
-            onClick={handleTakeback}
-            disabled={moves.length === 0 || botThinking}
-            className="px-6 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-all font-semibold flex items-center space-x-2"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span>Undo Move</span>
-          </button>
+          <div className="fixed bottom-6 left-6 z-40">
+            <button
+              onClick={handleTakeback}
+              disabled={moves.length === 0 || botThinking}
+              className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-all font-semibold flex items-center space-x-2 shadow-xl"
+            >
+              <RotateCcw className="w-5 h-5" />
+              <span>Undo Move</span>
+            </button>
+          </div>
         </div>
 
         {/* Right Sidebar - Player Info & History */}
