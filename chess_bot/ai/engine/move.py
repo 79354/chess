@@ -53,7 +53,16 @@ class Move:
         target_square = (ord(uci_str[2]) - ord('a')) + (int(uci_str[3]) - 1) * 8
         
         flag = Move.NO_FLAG
-        if len(uci_str) > 4:
+        
+        # FIX: Detect castling by king moving 2 squares
+        file_diff = abs((target_square % 8) - (start_square % 8))
+        
+        # Check if this is a king move (from e-file) moving 2 squares horizontally
+        start_file = start_square % 8
+        if start_file == 4 and file_diff == 2:  # King on e-file moving 2 squares
+            flag = Move.CASTLE_FLAG
+        elif len(uci_str) > 4:
+            # Promotion
             promotion_map = {
                 'q': Move.PROMOTE_TO_QUEEN_FLAG,
                 'n': Move.PROMOTE_TO_KNIGHT_FLAG,

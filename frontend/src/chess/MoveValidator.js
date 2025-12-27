@@ -9,23 +9,29 @@ class MoveValidator {
       return false;
     }
 
+    // ✅ FIX: Prevent capturing king
+    const targetPiece = this.board.getPiece(to);
+    if (targetPiece && targetPiece.type === 'king') {
+      return false;
+    }
+
     const moves = this.getPieceMoves(from);
     if (!moves.includes(to)) {
       return false;
     }
 
-    // Check if move leaves king in check
+    // ✅ FIX: Check if move leaves OUR king in check
     const testBoard = this.board.clone();
-    
-    // FIX: Save the current turn BEFORE makeMove switches it
-    const currentTurn = this.board.turn;
+    const ourColor = this.board.turn; // Save OUR color before move
     
     this.makeMove(testBoard, from, to, promotion);
     
-    // FIX: Use the ORIGINAL turn (before switch) to check OUR king
-    const kingSquare = this.findKing(testBoard, currentTurn);
-    if (this.isSquareAttacked(testBoard, kingSquare, currentTurn)) {
-      return false;
+    // Find OUR king and check if OPPONENT can attack it
+    const kingSquare = this.findKing(testBoard, ourColor);
+    const opponentColor = ourColor === 'white' ? 'black' : 'white';
+    
+    if (this.isSquareAttacked(testBoard, kingSquare, opponentColor)) {
+      return false; // Move leaves our king in check
     }
 
     return true;
@@ -183,7 +189,7 @@ class MoveValidator {
       }
     }
 
-    // Castling - with recursion protection
+    // Castling
     const kingSquare = square;
     const isKingAttacked = this.isSquareAttacked(this.board, kingSquare, color);
     
@@ -222,7 +228,6 @@ class MoveValidator {
   }
 
   getKingMovesSimple(square, color) {
-    // King moves WITHOUT castling check (prevents recursion in isSquareAttacked)
     const moves = [];
     const coord = this.board.squareToCoordinate(square);
 
@@ -244,7 +249,6 @@ class MoveValidator {
       }
     }
 
-    // NO CASTLING CHECK - this is for attack detection only
     return moves;
   }
 
@@ -252,14 +256,11 @@ class MoveValidator {
     const attackerColor = defenderColor === 'white' ? 'black' : 'white';
 
     for (const [sq, piece] of Object.entries(board.board)) {
-      if (piece && piece.color === attackerColor) {  // Add null check
-        // CRITICAL FIX: Use simple king moves to prevent recursion
+      if (piece && piece.color === attackerColor) {
         let moves;
         if (piece.type === 'king') {
-          // For kings, use simple moves (no castling check)
           moves = this.getKingMovesSimple(sq, piece.color);
         } else {
-          // For all other pieces, use normal move generation
           const tempValidator = new MoveValidator(board);
           moves = tempValidator.getPieceMoves(sq);
         }
@@ -284,13 +285,66 @@ class MoveValidator {
 
   makeMove(board, from, to, promotion) {
     const piece = board.getPiece(from);
-    
     const movedPiece = {...piece};
 
     if (promotion && movedPiece.type === 'pawn') {
       movedPiece.type = promotion;
     }
 
+    // ✅ FIX: Handle castling - move the rook too
+    if (movedPiece.type === 'king') {
+      const fromCoord = board.squareToCoordinate(from);
+      const toCoord = board.squareToCoordinate(to);
+      const fileDiff = toCoord.file - fromCoord.file;
+
+      // Castling detected (king moves 2 squares)
+      if (Math.abs(fileDiff) === 2) {
+        const rank = fromCoord.rank;
+        
+        if (fileDiff === 2) {
+          // Kingside castling
+          const rookFrom = board.coordToSquare(7, rank);
+          const rookTo = board.coordToSquare(5, rank);
+          const rook = board.getPiece(rookFrom);
+          if (rook) {
+            board.board[rookTo] = rook;
+            delete board.board[rookFrom];
+          }
+        } else if (fileDiff === -2) {
+          // Queenside castling
+          const rookFrom = board.coordToSquare(0, rank);
+          const rookTo = board.coordToSquare(3, rank);
+          const rook = board.getPiece(rookFrom);
+          if (rook) {
+            board.board[rookTo] = rook;
+            delete board.board[rookFrom];
+          }
+        }
+      }
+
+      // Remove castling rights after king moves
+      if (piece.color === 'white') {
+        board.castling.K = false;
+        board.castling.Q = false;
+      } else {
+        board.castling.k = false;
+        board.castling.q = false;
+      }
+    }
+
+    // Handle rook moves (remove castling rights)
+    if (movedPiece.type === 'rook') {
+      const fromCoord = board.squareToCoordinate(from);
+      if (piece.color === 'white') {
+        if (fromCoord.file === 0 && fromCoord.rank === 0) board.castling.Q = false;
+        if (fromCoord.file === 7 && fromCoord.rank === 0) board.castling.K = false;
+      } else {
+        if (fromCoord.file === 0 && fromCoord.rank === 7) board.castling.q = false;
+        if (fromCoord.file === 7 && fromCoord.rank === 7) board.castling.k = false;
+      }
+    }
+
+    // Move the piece
     board.board[to] = movedPiece;
     delete board.board[from];
     
@@ -326,6 +380,7 @@ class MoveValidator {
 
   isInCheck(color) {
     const kingSquare = this.findKing(this.board, color);
+    const opponentColor = color === 'white' ? 'black' : 'white';
     return this.isSquareAttacked(this.board, kingSquare, color);
   }
 

@@ -63,12 +63,13 @@ class MoveGenerator:
     def is_in_check(self, board):
         """
         Check if current side to move is in check.
-        CRITICAL: This must work correctly for legal move generation!
         """
-        color_index = 0 if board.white_to_move else 1
+        
+        color_index = 1 if board.white_to_move else 0  # FLIP IT
         king_square = board.king_square[color_index]
         
-        return self.is_square_attacked(board, king_square, not board.white_to_move)
+        # Check if opponent can attack this king
+        return self.is_square_attacked(board, king_square, board.white_to_move)
     
     def is_square_attacked(self, board, square, by_white):
         """Check if a square is attacked by given color"""
