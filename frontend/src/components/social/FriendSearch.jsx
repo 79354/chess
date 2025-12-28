@@ -59,7 +59,8 @@ function FriendSearch() {
 
     try {
       const response = await api.get(`/auth/users/search/?q=${encodeURIComponent(query)}`);
-      setSearchResults(response.results || []);
+      // Filter out current user from results if necessary, or ensure results are valid
+      setSearchResults(response.results || response.users || []);
     } catch (err) {
       setError('Search failed. Please try again.');
       console.error('Search error:', err);

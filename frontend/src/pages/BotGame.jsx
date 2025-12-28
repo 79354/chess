@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Cpu, RotateCcw, Home, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Cpu, RotateCcw, Home, Loader2, ChevronLeft, ChevronRight, Moon, Sun, Trophy } from "lucide-react";
 
 import ChessBoard from "../components/chess/ChessBoard";
 import MoveHistory from "../components/chess/MoveHistory";
@@ -10,9 +10,12 @@ import Board from "../chess/Board";
 import MoveValidator from "../chess/MoveValidator";
 import botService from "../services/botService";
 
+import useSound from "../hooks/useSound";
+
 function BotGame() {
   const navigate = useNavigate();
   const { gameId: urlGameId } = useParams();
+  const { playMove, playCheckmate, preloadSounds } = useSound();
 
   // Use ref to track gameId for cleanup
   const gameIdRef = useRef(null);
@@ -20,6 +23,11 @@ function BotGame() {
   // Game session
   const [gameId, setGameId] = useState(urlGameId || null);
   const [gameLoaded, setGameLoaded] = useState(false);
+  const [showGameEndedModal, setShowGameEndedModal] = useState(false);
+
+  useEffect(() => {
+    preloadSounds();
+  }, [preloadSounds]);
 
   // Game state
   const [board, setBoard] = useState(new Board());
@@ -69,20 +77,23 @@ function BotGame() {
   }, [urlGameId, gameLoaded]);
 
 
-  useEffect(() => {
-    // Save scroll position before move
+  // Suppress scroll during moves only
+  const suppressScrollTemporarily = useCallback(() => {
     const savedScrollY = window.scrollY;
+    let preventScroll = true;
     
-    // Prevent auto-scroll to focused elements
-    const preventAutoScroll = (e) => {
-      window.scrollTo(0, savedScrollY);
+    const handler = (e) => {
+      if (preventScroll) {
+        window.scrollTo(0, savedScrollY);
+      }
     };
     
-    window.addEventListener('scroll', preventAutoScroll, { passive: false });
+    window.addEventListener('scroll', handler, { passive: false });
     
-    return () => {
-      window.removeEventListener('scroll', preventAutoScroll);
-    };
+    setTimeout(() => {
+      preventScroll = false;
+      window.removeEventListener('scroll', handler);
+    }, 100);
   }, []);
 
   const loadExistingGame = async (gId) => {
@@ -149,6 +160,9 @@ function BotGame() {
         setTimeout(() => setError(null), 3000);
         return false;
       }
+
+      // Suppress scroll during move
+      suppressScrollTemporarily();
 
       const piece = board.getPiece(from);
       const capturedPiece = board.getPiece(to);
@@ -306,6 +320,12 @@ function BotGame() {
             winner: result.winner,
             result: result.result,
           }));
+          setShowGameEndedModal(true);
+          playCheckmate();
+        } else if (result.bot_move) {
+           playMove({ isCheck: result.is_check });
+        } else {
+           playMove({});
         }
       } else {
         setError(result.error || "Failed to get bot response");
@@ -681,6 +701,16 @@ function BotGame() {
             />
           </div>
 
+          {/* Undo Button */}
+          <button
+            onClick={handleTakeback}
+            disabled={moves.length === 0 || botThinking}
+            className="w-full px-4 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-all font-semibold flex items-center justify-center space-x-2 shadow-lg"
+          >
+            <RotateCcw className="w-5 h-5" />
+            <span>Undo Move</span>
+          </button>
+
           <button
             onClick={resetGame}
             className="w-full flex items-center justify-center space-x-2 bg-white/10 hover:bg-white/20 text-white rounded-lg p-3 transition-all"
@@ -708,36 +738,28 @@ function BotGame() {
               getValidMoves={getValidMoves}
             />
           </div>
-          <div className="fixed bottom-6 left-6 z-40">
-            <button
-              onClick={handleTakeback}
-              disabled={moves.length === 0 || botThinking}
-              className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-all font-semibold flex items-center space-x-2 shadow-xl"
-            >
-              <RotateCcw className="w-5 h-5" />
-              <span>Undo Move</span>
-            </button>
-          </div>
         </div>
 
         {/* Right Sidebar - Player Info & History */}
         <div className="space-y-6">
           <div className="bg-white/5 backdrop-blur-lg rounded-xl border border-white/10 p-4">
-            <div className="flex items-center space-x-3 mb-3">
-              <div
-                className={`w-10 h-10 rounded-full flex items-center justify-center text-xl ${
-                  playerColor === "white"
-                    ? "bg-white text-gray-900"
-                    : "bg-gray-900 text-white"
-                }`}
-              >
-                {playerColor === "white" ? "♔" : "♚"}
-              </div>
-              <div>
-                <p className="text-white font-semibold">You</p>
-                <p className="text-white/60 text-sm capitalize">
-                  {playerColor}
-                </p>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-3">
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center text-xl ${
+                    playerColor === "white"
+                      ? "bg-white text-gray-900"
+                      : "bg-gray-900 text-white"
+                  }`}
+                >
+                  {playerColor === "white" ? "♔" : "♚"}
+                </div>
+                <div>
+                  <p className="text-white font-semibold">You</p>
+                  <p className="text-white/60 text-sm capitalize">
+                    {playerColor}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -762,6 +784,33 @@ function BotGame() {
         color={playerColor}
         onSelect={handlePromotion}
       />
+
+      {showGameEndedModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border-2 border-purple-500/50 shadow-2xl p-8 max-w-md w-full mx-4 text-center">
+            <Trophy className={`w-16 h-16 mx-auto mb-4 ${gameState.winner ? 'text-yellow-400' : 'text-gray-400'}`} />
+            <h2 className="text-3xl font-bold text-white mb-2">
+              {gameState.winner ? (gameState.winner === playerColor ? 'You Won!' : 'Bot Won!') : 'Game Drawn'}
+            </h2>
+            <p className="text-white/60 mb-6 capitalize">{gameState.result || 'Game Over'}</p>
+            
+            <div className="flex space-x-4">
+              <button
+                onClick={() => setShowGameEndedModal(false)}
+                className="flex-1 px-6 py-3 rounded-lg font-semibold bg-white/10 hover:bg-white/20 text-white transition-all"
+              >
+                Review
+              </button>
+              <button
+                onClick={() => navigate('/')}
+                className="flex-1 px-6 py-3 rounded-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white transition-all"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

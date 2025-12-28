@@ -76,7 +76,7 @@ function Footer() {
             <h3 className="text-white font-bold text-lg mb-4">Connect</h3>
             <div className="flex space-x-4 mb-4">
               <a
-                href="https://github.com"
+                href="https://github.com/79354/chess"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-white/60 hover:text-white transition-colors"

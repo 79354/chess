@@ -164,21 +164,21 @@ function Login() {
             <div className="flex-1 border-t border-white/20"></div>
           </div>
 
-          {/* Google Login with Debug Info */}
+          {/* Google Login */}
           <div className="mt-4">
-            <div className="mb-2 text-xs text-white/40 text-center">
-              Backend URL: {import.meta.env.VITE_API_URL || 'http://localhost:8000/api'}
+            <div className="flex justify-center">
+              <GoogleLogin
+                onSuccess={handleGoogleSuccess}
+                onError={handleGoogleError}
+                useOneTap={false}
+                theme="filled_blue"
+                size="large"
+                text="signin_with"
+                shape="pill"
+                width="100%"
+                logo_alignment="center"
+              />
             </div>
-            <GoogleLogin
-              onSuccess={handleGoogleSuccess}
-              onError={handleGoogleError}
-              useOneTap={false}
-              theme="filled_black"
-              size="large"
-              text="signin_with"
-              shape="rectangular"
-              logo_alignment="left"
-            />
           </div>
 
           {/* Sign Up Link */}

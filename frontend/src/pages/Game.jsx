@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import useWebSocket from '../services/socketService';
-import { Handshake, Loader2 } from 'lucide-react';
+import { Handshake, Loader2, Trophy } from 'lucide-react';
 
 import ChessBoard from '../components/chess/ChessBoard';
 import GameClock from '../components/chess/GameClock';
@@ -71,20 +71,25 @@ function Game() {
     preloadSounds();
   }, [preloadSounds]);
 
-  useEffect(() => {
-    // Save scroll position before move
+  // Prevent auto-scroll when moves are made (focus on inputs can cause scrolling)
+  const preventAutoScrollRef = useRef(null);
+
+  const suppressScrollTemporarily = useCallback(() => {
     const savedScrollY = window.scrollY;
+    preventAutoScrollRef.current = true;
     
-    // Prevent auto-scroll to focused elements
-    const preventAutoScroll = (e) => {
-      window.scrollTo(0, savedScrollY);
+    const handler = (e) => {
+      if (preventAutoScrollRef.current) {
+        window.scrollTo(0, savedScrollY);
+      }
     };
     
-    window.addEventListener('scroll', preventAutoScroll, { passive: false });
+    window.addEventListener('scroll', handler, { passive: false });
     
-    return () => {
-      window.removeEventListener('scroll', preventAutoScroll);
-    };
+    setTimeout(() => {
+      preventAutoScrollRef.current = false;
+      window.removeEventListener('scroll', handler);
+    }, 100);
   }, []);
 
 
@@ -242,6 +247,8 @@ function Game() {
     }));
   }, []);
 
+  const [showGameEndedModal, setShowGameEndedModal] = useState(false);
+
   const handleGameEnded = useCallback((data) => {
     console.log('🏁 Game ended:', data);
     
@@ -256,10 +263,12 @@ function Game() {
       termination: data.reason || data.termination,
     }));
 
+    setShowGameEndedModal(true);
+
     if (data.rating_changes) {
       console.log('📊 Rating changes:', data.rating_changes);
     }
-  }, []);
+  }, [playCheckmate]);
 
   const handleDrawOffer = useCallback((data) => {
     setDrawOffer({
@@ -392,6 +401,9 @@ function Game() {
       setTimeout(() => setError(null), 3000);
       return;
     }
+
+    // Suppress scroll during move
+    suppressScrollTemporarily();
 
     // ✅ Set move in progress IMMEDIATELY
     setMoveInProgress(true);
@@ -579,8 +591,18 @@ function Game() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_280px] gap-4 h-full">
+      <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr_280px] gap-4 h-full">
         <div className="space-y-6">
+          <div className="h-64">
+            <ChatBox
+              gameId={gameId}
+              isPlayerChat={!isSpectator}
+              currentUser={user}
+              websocketSend={send}
+              onMessage={registerChatHandler}
+            />
+          </div>
+
           <GameClock
             initialTime={playerColor === 'white' ? blackTime : whiteTime}
             increment={timeIncrement}
@@ -650,16 +672,6 @@ function Game() {
             currentMoveIndex={currentMoveIndex}
             onMoveClick={handleMoveClick}
           />
-
-          <div className="h-64">
-            <ChatBox
-              gameId={gameId}
-              isPlayerChat={!isSpectator}
-              currentUser={user}
-              websocketSend={send}
-              onMessage={registerChatHandler}
-            />
-          </div>
         </div>
       </div>
 
@@ -677,6 +689,44 @@ function Game() {
         color={playerColor}
         onSelect={handlePromotion}
       />
+
+      {showGameEndedModal && (
+        <GameEndedModal
+          gameState={gameState}
+          onClose={() => setShowGameEndedModal(false)}
+          onLeave={() => navigate('/')}
+        />
+      )}
+    </div>
+  );
+}
+
+function GameEndedModal({ gameState, onClose, onLeave }) {
+  const isDraw = gameState.status === 'draw' || gameState.status === 'stalemate';
+  const title = isDraw ? 'Game Drawn' : (gameState.winner === 'white' ? 'White Wins' : 'Black Wins');
+  
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border-2 border-purple-500/50 shadow-2xl p-8 max-w-md w-full mx-4 text-center">
+        <Trophy className={`w-16 h-16 mx-auto mb-4 ${isDraw ? 'text-gray-400' : 'text-yellow-400'}`} />
+        <h2 className="text-3xl font-bold text-white mb-2">{title}</h2>
+        <p className="text-white/60 mb-6 capitalize">{gameState.termination || gameState.status}</p>
+        
+        <div className="flex space-x-4">
+          <button
+            onClick={onClose}
+            className="flex-1 px-6 py-3 rounded-lg font-semibold bg-white/10 hover:bg-white/20 text-white transition-all"
+          >
+            Review Board
+          </button>
+          <button
+            onClick={onLeave}
+            className="flex-1 px-6 py-3 rounded-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white transition-all"
+          >
+            Leave Room
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

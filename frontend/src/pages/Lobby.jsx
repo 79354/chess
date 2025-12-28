@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trophy, Clock, Users, Search, Plus, Filter } from 'lucide-react';
-import api from '../services/api';
+import tournamentService from '../services/tournamentService';
 
 function Lobby() {
   const [tournaments, setTournaments] = useState([]);
   const [filter, setFilter] = useState('all'); // all, ongoing, upcoming
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -16,55 +17,63 @@ function Lobby() {
 
   const fetchTournaments = async () => {
     setLoading(true);
+    setError(null);
     try {
-      // TODO: Replace with actual API endpoint when available
-      // const response = await api.get('/tournaments', { params: { status: filter } });
+      const result = await tournamentService.getTournaments(filter);
       
-      // Mock data for now
-      setTournaments([
-        {
-          id: 1,
-          name: 'Hourly Rapid Arena',
-          status: 'ongoing',
-          players: 409,
-          maxPlayers: 500,
-          timeControl: '10+0',
-          startTime: new Date(Date.now() - 25 * 60000),
-          duration: 60,
-          prize: '100 coins',
-          entryFee: 'Free',
-        },
-        {
-          id: 2,
-          name: 'Hourly Blitz Arena',
-          status: 'ongoing',
-          players: 289,
-          maxPlayers: 400,
-          timeControl: '5+0',
-          startTime: new Date(Date.now() - 15 * 60000),
-          duration: 60,
-          prize: '75 coins',
-          entryFee: 'Free',
-        },
-        {
-          id: 3,
-          name: 'Hourly Bullet Arena',
-          status: 'upcoming',
-          players: 56,
-          maxPlayers: 300,
-          timeControl: '1+0',
-          startTime: new Date(Date.now() + 5 * 60000),
-          duration: 45,
-          prize: '50 coins',
-          entryFee: 'Free',
-        },
-      ]);
+      if (result.success) {
+        setTournaments(Array.isArray(result.data) ? result.data : result.data.results || []);
+      } else {
+        // Fallback to mock data if API not available
+        setTournaments(getMockTournaments());
+      }
     } catch (error) {
       console.error('Failed to fetch tournaments:', error);
+      setError('Failed to load tournaments');
+      setTournaments(getMockTournaments());
     } finally {
       setLoading(false);
     }
   };
+
+  const getMockTournaments = () => [
+    {
+      id: 1,
+      name: 'Hourly Rapid Arena',
+      status: 'ongoing',
+      players: 409,
+      maxPlayers: 500,
+      timeControl: '10+0',
+      startTime: new Date(Date.now() - 25 * 60000),
+      duration: 60,
+      prize: '100 coins',
+      entryFee: 'Free',
+    },
+    {
+      id: 2,
+      name: 'Hourly Blitz Arena',
+      status: 'ongoing',
+      players: 289,
+      maxPlayers: 400,
+      timeControl: '5+0',
+      startTime: new Date(Date.now() - 15 * 60000),
+      duration: 60,
+      prize: '75 coins',
+      entryFee: 'Free',
+    },
+    {
+      id: 3,
+      name: 'Hourly Bullet Arena',
+      status: 'upcoming',
+      players: 56,
+      maxPlayers: 300,
+      timeControl: '1+0',
+      startTime: new Date(Date.now() + 5 * 60000),
+      duration: 45,
+      prize: '50 coins',
+      entryFee: 'Free',
+    },
+  ];
 
   const filteredTournaments = tournaments.filter(t => {
     if (filter !== 'all' && t.status !== filter) return false;
@@ -97,6 +106,21 @@ function Lobby() {
     
     const hours = Math.floor(minutes / 60);
     return `Starting in ${hours}h ${minutes % 60}m`;
+  };
+
+  const handleJoinTournament = async (tournamentId) => {
+    try {
+      const result = await tournamentService.joinTournament(tournamentId);
+      if (result.success) {
+        alert('Successfully joined tournament!');
+        navigate(`/lobby/${tournamentId}`);
+      } else {
+        alert(result.error || 'Failed to join tournament');
+      }
+    } catch (error) {
+      console.error('Error joining tournament:', error);
+      alert('Error joining tournament');
+    }
   };
 
   return (
@@ -240,7 +264,7 @@ function Lobby() {
                 }`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  // Handle join/register
+                  handleJoinTournament(tournament.id);
                 }}
               >
                 {tournament.status === 'ongoing' ? 'Join Now' : 'Register'}
