@@ -786,26 +786,31 @@ function BotGame() {
       />
 
       {showGameEndedModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border-2 border-purple-500/50 shadow-2xl p-8 max-w-md w-full mx-4 text-center">
-            <Trophy className={`w-16 h-16 mx-auto mb-4 ${gameState.winner ? 'text-yellow-400' : 'text-gray-400'}`} />
-            <h2 className="text-3xl font-bold text-white mb-2">
-              {gameState.winner ? (gameState.winner === playerColor ? 'You Won!' : 'Bot Won!') : 'Game Drawn'}
-            </h2>
-            <p className="text-white/60 mb-6 capitalize">{gameState.result || 'Game Over'}</p>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[100]">
+          <div className="bg-slate-900 rounded-2xl border border-white/20 shadow-2xl p-8 max-w-sm w-full mx-4 text-center relative">
+            <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-slate-900 p-4 rounded-full border border-white/20">
+              <Trophy className={`w-12 h-12 ${gameState.winner ? 'text-yellow-400' : 'text-slate-400'}`} />
+            </div>
+
+            <div className="mt-6 mb-8">
+              <h2 className="text-3xl font-black text-white mb-1 uppercase tracking-tight">
+                {gameState.winner ? (gameState.winner === playerColor ? 'You Won!' : 'Bot Won!') : 'Game Drawn'}
+              </h2>
+              <p className="text-purple-400 font-medium text-sm tracking-widest uppercase">{gameState.result || 'Game Over'}</p>
+            </div>
             
-            <div className="flex space-x-4">
+            <div className="flex flex-col space-y-3">
               <button
                 onClick={() => setShowGameEndedModal(false)}
-                className="flex-1 px-6 py-3 rounded-lg font-semibold bg-white/10 hover:bg-white/20 text-white transition-all"
+                className="w-full px-6 py-4 rounded-xl font-bold bg-white/5 hover:bg-white/10 text-white border border-white/10 transition-all hover:scale-[1.02] active:scale-[0.98]"
               >
-                Review
+                Review Board
               </button>
               <button
                 onClick={() => navigate('/')}
-                className="flex-1 px-6 py-3 rounded-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white transition-all"
+                className="w-full px-6 py-4 rounded-xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white shadow-lg shadow-purple-500/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
               >
-                Leave
+                Leave Room
               </button>
             </div>
           </div>

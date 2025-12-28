@@ -7,12 +7,14 @@ function Home() {
     const navigate = useNavigate();
 
     return (
-        <div className="container mx-auto max-w-7xl">
-            <div className="grid lg:grid-cols-[1fr_320px] gap-6">
-                <div className="space-y-6">
+        <div className="container mx-auto max-w-7xl px-4 py-8">
+            <div className="grid lg:grid-cols-[1fr_300px] gap-8">
+                <div className="space-y-8">
                     <QuickPairingGrid />
-                    <HomeSidebar />
                     <TournamentsList />
+                </div>
+                <div className="space-y-8">
+                    <HomeSidebar />
                 </div>
             </div>
         </div>
@@ -194,20 +196,20 @@ function HomeSidebar() {
       </div>
 
       {/* Puzzle of the Day */}
-      <div className="bg-gradient-to-br from-purple-600/20 to-pink-600/20 backdrop-blur-lg rounded-2xl border border-purple-500/30 p-6 shadow-2xl">
-        <h3 className="text-xl font-bold text-white mb-2">Puzzle of the Day</h3>
-        <p className="text-white/70 text-sm mb-4">Improve your tactics</p>
+      <div className="bg-gradient-to-br from-purple-600/20 to-pink-600/20 backdrop-blur-lg rounded-2xl border border-purple-500/30 p-4 shadow-xl">
+        <h3 className="text-lg font-bold text-white mb-1">Puzzle of the Day</h3>
+        <p className="text-white/60 text-xs mb-3">Improve your tactics</p>
         
-        <div className="aspect-square bg-gradient-to-br from-amber-900/40 to-amber-700/40 rounded-lg mb-4 flex items-center justify-center border-2 border-amber-600/30">
-          <div className="text-6xl">♔</div>
+        <div className="w-full aspect-square max-w-[120px] mx-auto bg-gradient-to-br from-amber-900/40 to-amber-700/40 rounded-lg mb-3 flex items-center justify-center border border-amber-600/30">
+          <div className="text-3xl">♔</div>
         </div>
         
         <button 
           onClick={() => navigate('/puzzles')}
-          className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-lg py-3 font-semibold transition-all duration-300 hover:scale-105 shadow-lg"
+          className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-lg py-2 text-sm font-semibold transition-all duration-300 hover:scale-105 shadow-md"
         >
-          <Target className="w-5 h-5 inline mr-2" />
-          Solve Puzzle
+          <Target className="w-4 h-4 inline mr-1" />
+          Solve
         </button>
       </div>
 

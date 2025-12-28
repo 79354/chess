@@ -85,7 +85,7 @@ function Footer() {
               </a>
             </div>
             <p className="text-white/60 text-sm">
-              <a href="/contact" className="hover:text-purple-400 transition-colors">
+              <a href="https://github.com/79354/chess" className="hover:text-purple-400 transition-colors">
                 Contact Support
               </a>
             </p>
