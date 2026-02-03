@@ -1,10 +1,14 @@
-*.js linguist-detectable=false
-*.js linguist-documentation=true
+# Nuking JavaScript from stats
+**/*.js linguist-detectable=false
+**/*.jsx linguist-detectable=false
+**/*.ts linguist-detectable=false
+**/*.tsx linguist-detectable=false
 
-package.json linguist-detectable=false
+**/*.js linguist-generated=true
+
+**/*.go linguist-detectable=true
+**/*.py linguist-detectable=true
+
+# standard ignores
+node_modules/ linguist-vendored
 package-lock.json linguist-detectable=false
-
-node_modules/** linguist-vendored
-vendor/** linguist-vendored
-
-*.go linguist-detectable=true
