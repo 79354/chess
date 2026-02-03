@@ -1,0 +1,10 @@
+*.js linguist-detectable=false
+*.js linguist-documentation=true
+
+package.json linguist-detectable=false
+package-lock.json linguist-detectable=false
+
+node_modules/** linguist-vendored
+vendor/** linguist-vendored
+
+*.go linguist-detectable=true
