@@ -1,12 +1,24 @@
 import asyncio
 import json
+import redis
+import redis.asyncio as aioredis
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
+from channels.layers import get_channel_layer
 from django.utils import timezone
 from datetime import datetime
-import redis.asyncio as aioredis
 from django.conf import settings
+from .tasks import find_match, leave_queue
 
+# --- Global Synchronous Redis for Matchmaking ---
+# Used for atomic operations in MatchmakingConsumer to avoid Celery bottlenecks
+# Tries to load REDIS_URL, falls back to localhost if not set
+try:
+    REDIS_URL = getattr(settings, 'REDIS_URL', f"redis://{getattr(settings, 'REDIS_HOST', 'localhost')}:{getattr(settings, 'REDIS_PORT', 6379)}/0")
+    redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    print(f"Warning: Global Redis client failed to initialize: {e}")
+    redis_client = None
 
 class GameConsumer(AsyncWebsocketConsumer):
     """Event-driven game consumer using Redis pub/sub"""
@@ -20,10 +32,18 @@ class GameConsumer(AsyncWebsocketConsumer):
         self.game_channel = f"game:{self.game_id}:events"
         self.clock_channel = f"game:{self.game_id}:clock"
         
-        # FIX: Better Redis connection with error handling
+        # FIX: Better Redis connection supporting REDIS_URL and KeepAlive options
         try:
+            # Determine connection URL
+            if hasattr(settings, 'REDIS_URL'):
+                redis_url = settings.REDIS_URL
+            else:
+                host = getattr(settings, 'REDIS_HOST', 'localhost')
+                port = getattr(settings, 'REDIS_PORT', 6379)
+                redis_url = f"redis://{host}:{port}"
+
             self.redis = await aioredis.from_url(
-                f"redis://{getattr(settings, 'REDIS_HOST', 'localhost')}:{getattr(settings, 'REDIS_PORT', 6379)}",
+                redis_url,
                 encoding="utf-8",
                 decode_responses=True,
                 socket_keepalive=True,  # Keep connection alive
@@ -41,9 +61,9 @@ class GameConsumer(AsyncWebsocketConsumer):
             # Start listening task
             self.listener_task = asyncio.create_task(self._redis_listener())
             
-            print(f"Redis connected for game {self.game_id}")
+            print(f"✅ Redis connected for game {self.game_id}")
         except Exception as e:
-            print(f"Redis connection failed: {e}. Falling back to channel layer only.")
+            print(f"❌ Redis connection failed: {e}. Falling back to channel layer only.")
             self.redis = None
             self.pubsub = None
         
@@ -59,7 +79,7 @@ class GameConsumer(AsyncWebsocketConsumer):
             await self.clock_manager.subscribe(self.channel_name)
         
         await self.accept()
-        print(f"{self.user.username} connected to game {self.game_id}")
+        print(f"👤 {self.user.username} connected to game {self.game_id}")
     
     async def disconnect(self, close_code):
         print(f"🔌 {self.user.username} disconnecting from game {self.game_id} (code: {close_code})")
@@ -117,24 +137,12 @@ class GameConsumer(AsyncWebsocketConsumer):
             print("🔌 Redis listener cancelled")
         except Exception as e:
             print(f"Redis listener error: {e}")
-            # Don't crash, just log and exit gracefully
     
     async def _handle_redis_event(self, event):
-        """Handle incoming Redis events"""
-        event_type = event.get('type')
-        
-        if event_type == 'move_made':
-            await self.send(json.dumps(event))
-        elif event_type == 'game_ended':
-            await self.send(json.dumps(event))
-        elif event_type == 'draw_offer':
-            await self.send(json.dumps(event))
-        elif event_type == 'draw_declined':
-            await self.send(json.dumps(event))
-        elif event_type == 'clock_sync':
-            await self.send(json.dumps(event))
-        else:
-            await self.send(json.dumps(event))
+        """Handle incoming Redis events - Pass directly to websocket"""
+        # Logic from original file preserved (handling specific types if needed)
+        # But mostly we just forward the event payload
+        await self.send(json.dumps(event))
     
     async def receive(self, text_data):
         """Handle incoming WebSocket messages"""
@@ -211,6 +219,7 @@ class GameConsumer(AsyncWebsocketConsumer):
     async def make_move(self, payload):
         """
         Handle move from player - Event-driven with Redis
+        PRESERVED: High-detail validation from Original File
         """
         from_square = payload.get('from')
         to_square = payload.get('to')
@@ -219,7 +228,7 @@ class GameConsumer(AsyncWebsocketConsumer):
         # Add move attempt logging
         print(f"Move attempt: {self.user.username} {from_square}->{to_square}")
         
-        # Acquire distributed lock via Redis (with fallback)
+        # Acquire distributed lock via Redis (FIX: Using nx=True from fixes)
         if self.redis:
             lock_key = f"lock:game:{self.game_id}:move"
             lock_acquired = await self.redis.set(lock_key, self.user.id, nx=True, ex=5)
@@ -265,12 +274,7 @@ class GameConsumer(AsyncWebsocketConsumer):
             if not engine.is_valid_move(from_square, to_square, promotion):
                 # Log WHY it's invalid
                 piece = engine.board.get(from_square)
-                print(f"   Invalid move rejected:")
-                print(f"   From: {from_square} -> To: {to_square}")
-                print(f"   Piece at source: {piece}")
-                print(f"   Engine turn: {engine.turn}")
-                print(f"   Moving color: {moving_color}")
-                print(f"   Player: {self.user.username}")
+                print(f"   Invalid move rejected: {from_square} -> {to_square}")
                 
                 await self.send(json.dumps({
                     'type': 'error',
@@ -314,6 +318,7 @@ class GameConsumer(AsyncWebsocketConsumer):
                     'status': result.get('status', 'ongoing'),
                     'winner': result.get('winner'),
                     'is_check': result.get('is_check', False),
+                    'is_checkmate': result.get('is_checkmate', False),
                     'color': moving_color,
                     'timestamp': timezone.now().isoformat(),
                     'sequence': game.move_count,
@@ -326,7 +331,6 @@ class GameConsumer(AsyncWebsocketConsumer):
             # Publish to Redis if available
             if self.redis:
                 await self.redis.publish(self.game_channel, json.dumps(move_event))
-                print(f"Move published to Redis: {moving_color} {from_square}->{to_square}")
             
             # Also broadcast via channel layer (fallback)
             await self.channel_layer.group_send(
@@ -401,10 +405,6 @@ class GameConsumer(AsyncWebsocketConsumer):
         game = await self.get_game()
         
         if not game or game.status != 'ongoing':
-            await self.send(json.dumps({
-                'type': 'error',
-                'message': 'Game is not ongoing'
-            }))
             return
         
         # Determine winner
@@ -417,10 +417,6 @@ class GameConsumer(AsyncWebsocketConsumer):
             winner_color = 'white'
             result = '1-0'
         else:
-            await self.send(json.dumps({
-                'type': 'error',
-                'message': 'You are not a player in this game'
-            }))
             return
         
         # Update game in database
@@ -446,13 +442,7 @@ class GameConsumer(AsyncWebsocketConsumer):
     async def offer_draw(self):
         """Offer draw via Redis"""
         game = await self.get_game()
-        
-        if not game or game.status != 'ongoing':
-            await self.send(json.dumps({
-                'type': 'error',
-                'message': 'Game is not ongoing'
-            }))
-            return
+        if not game or game.status != 'ongoing': return
         
         # Determine who made the offer
         if game.white_player.id == self.user.id:
@@ -460,10 +450,6 @@ class GameConsumer(AsyncWebsocketConsumer):
         elif game.black_player.id == self.user.id:
             offer_from = 'black'
         else:
-            await self.send(json.dumps({
-                'type': 'error',
-                'message': 'You are not a player in this game'
-            }))
             return
         
         # Publish draw offer to Redis
@@ -477,13 +463,7 @@ class GameConsumer(AsyncWebsocketConsumer):
     async def accept_draw(self):
         """Accept draw via Redis"""
         game = await self.get_game()
-        
-        if not game or game.status != 'ongoing':
-            await self.send(json.dumps({
-                'type': 'error',
-                'message': 'Game is not ongoing'
-            }))
-            return
+        if not game or game.status != 'ongoing': return
         
         # Update game to draw
         await self.end_game(
@@ -775,7 +755,6 @@ class GameClockManager:
         
         K = 32
         expected_white = 1 / (1 + 10 ** ((game.black_rating_before - game.white_rating_before) / 400))
-        expected_black = 1 - expected_white
         
         if result == '1-0':
             actual_white, actual_black = 1, 0
@@ -783,7 +762,7 @@ class GameClockManager:
             actual_white, actual_black = 0, 1
         
         white_change = round(K * (actual_white - expected_white))
-        black_change = round(K * (actual_black - expected_black))
+        black_change = round(K * (actual_black - (1 - expected_white)))
         
         game.white_rating_after = game.white_rating_before + white_change
         game.black_rating_after = game.black_rating_before + black_change
@@ -809,7 +788,7 @@ class GameClockManager:
 class MatchmakingConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for matchmaking
-    Uses Celery tasks for async matching with timeout
+    FIXED: Implements hybrid Redis/Celery approach to prevent 'Ghost Players' and bottlenecks
     """
     
     async def connect(self):
@@ -819,10 +798,11 @@ class MatchmakingConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
         
-        await self.accept()
+        # Join personal user group for notifications (Specific to Fix)
+        self.user_group = f"user_{self.user.id}"
+        await self.channel_layer.group_add(self.user_group, self.channel_name)
         
-        # Store channel name for this user
-        self.channel_name_stored = self.channel_name
+        await self.accept()
         
         await self.send(text_data=json.dumps({
             'type': 'connected',
@@ -832,10 +812,21 @@ class MatchmakingConsumer(AsyncWebsocketConsumer):
         print(f"{self.user.username} connected to matchmaking")
     
     async def disconnect(self, close_code):
-        # Remove from any queues
-        if hasattr(self, 'current_time_control'):
-            await self.leave_matchmaking_queue(self.current_time_control)
-        
+        # FIX: THE GHOST PLAYER cleanup
+        # Instantly remove user from all potential queues via Direct Redis
+        if redis_client:
+            try:
+                # Using scan to find queues is safer than keys() in production
+                cursor = '0'
+                while cursor != 0:
+                    cursor, keys = redis_client.scan(cursor=cursor, match="matchmaking:*", count=100)
+                    for key in keys:
+                        redis_client.srem(key, self.user.id)
+            except Exception as e:
+                print(f"Cleanup Error: {e}")
+
+        # Remove from personal group
+        await self.channel_layer.group_discard(self.user_group, self.channel_name)
         print(f"🔌 {self.user.username} disconnected from matchmaking")
     
     async def receive(self, text_data):
@@ -863,17 +854,25 @@ class MatchmakingConsumer(AsyncWebsocketConsumer):
             }))
     
     async def handle_join_queue(self, data):
-        """Join matchmaking queue"""
+        """Join matchmaking queue - Fixed for Bottlenecks"""
         time_control = data.get('time_control', '10+0')
+        self.current_time_control = time_control # Tracking for local ref
         
-        # Store current time control
-        self.current_time_control = time_control
+        # FIX: THE CELERY BOTTLENECK
+        # Write to Redis IMMEDIATELY so the user is in the pool instantly
+        if redis_client:
+            queue_key = f"matchmaking:{time_control}"
+            redis_client.sadd(queue_key, self.user.id)
         
-        # Get user rating
-        rating = await self.get_user_rating()
+        await self.send(json.dumps({
+            'type': 'matchmaking.queued',
+            'time_control': time_control,
+            'message': 'Searching for opponent...'
+        }))
         
-        # Start Celery task for matchmaking
-        from .tasks import find_match
+        # Now trigger the task to check if we can pair
+        # We pass self.user.rating directly if available, otherwise fetch it
+        rating = self.user.rating if hasattr(self.user, 'rating') else await self.get_user_rating()
         
         find_match.delay(
             user_id=self.user.id,
@@ -888,32 +887,32 @@ class MatchmakingConsumer(AsyncWebsocketConsumer):
         """Leave matchmaking queue"""
         time_control = data.get('time_control') or getattr(self, 'current_time_control', None)
         
-        if time_control:
-            await self.leave_matchmaking_queue(time_control)
+        if time_control and redis_client:
+            redis_client.srem(f"matchmaking:{time_control}", self.user.id)
+            await self.send(json.dumps({'type': 'matchmaking.left'}))
+            
+            # Also notify Celery to clean up any pending tasks
+            leave_queue.delay(
+                user_id=self.user.id,
+                time_control=time_control,
+                channel_name=self.channel_name
+            )
+            print(f"🚪 {self.user.username} leaving queue for {time_control}")
     
     async def handle_queue_status(self, data):
-        """Get current queue status"""
+        """Get current queue status - Restored from Original"""
         time_control = data.get('time_control', '10+0')
-        count = await self.get_queue_count(time_control)
+        count = 0
+        
+        if redis_client:
+            queue_key = f"matchmaking:{time_control}"
+            count = redis_client.scard(queue_key)
         
         await self.send(json.dumps({
             'type': 'queue_status',
             'time_control': time_control,
             'players_in_queue': count
         }))
-    
-    async def leave_matchmaking_queue(self, time_control):
-        """Remove user from queue"""
-        from .tasks import leave_queue
-        
-        leave_queue.delay(
-            user_id=self.user.id,
-            time_control=time_control,
-            channel_name=self.channel_name
-        )
-        
-        print(f"🚪 {self.user.username} leaving queue for {time_control}")
-    
 
     # Channel Layer Handlers (called by Celery tasks)
     
@@ -955,24 +954,7 @@ class MatchmakingConsumer(AsyncWebsocketConsumer):
             'message': event['message']
         }))
     
-
     # Database Queries
-    
     @database_sync_to_async
     def get_user_rating(self):
         return self.user.rating
-    
-    @database_sync_to_async
-    def get_queue_count(self, time_control):
-        import redis
-        from django.conf import settings
-        
-        redis_client = redis.Redis(
-            host=getattr(settings, 'REDIS_HOST', 'localhost'),
-            port=getattr(settings, 'REDIS_PORT', 6379),
-            db=1,
-            decode_responses=True
-        )
-        
-        queue_key = f"matchmaking:{time_control}"
-        return redis_client.scard(queue_key)

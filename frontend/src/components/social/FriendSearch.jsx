@@ -2,29 +2,37 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Search, UserPlus, UserCheck, Clock, X, Swords, Eye } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
+import debounce from 'lodash.debounce'; // Ensure you ran: npm install lodash.debounce
 
 function FriendSearch() {
+  // --- STATE ---
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+
   const [friends, setFriends] = useState([]);
   const [friendRequests, setFriendRequests] = useState({ received: [], sent: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
   const [showChallengeModal, setShowChallengeModal] = useState(false);
   const [selectedFriend, setSelectedFriend] = useState(null);
   const navigate = useNavigate();
 
-  // Load friends and requests on mount
+  // --- INITIAL LOAD & POLLING ---
   useEffect(() => {
     loadFriends();
     loadFriendRequests();
-    
+
     // Refresh friends list every 30 seconds
-    const interval = setInterval(loadFriends, 30000);
+    const interval = setInterval(() => {
+      loadFriends();
+      loadFriendRequests(); // Good to sync requests too
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
+  // --- API CALLS ---
   const loadFriends = async () => {
     try {
       const response = await api.get('/auth/friends/');
@@ -48,44 +56,51 @@ function FriendSearch() {
     }
   };
 
-  const handleSearch = useCallback(async (query) => {
-    if (query.length < 2) {
+  // --- FIXED SEARCH LOGIC (The "Search Bug" Fix) ---
+  // We use useCallback + lodash.debounce to prevent race conditions
+  const debouncedSearch = useCallback(
+    debounce(async (query) => {
+      if (!query || query.length < 2) {
+        setSearchResults([]);
+        setSearching(false);
+        return;
+      }
+
+      try {
+        const response = await api.get(`/auth/users/search/?q=${encodeURIComponent(query)}`);
+        // Filter out existing friends from search results if you want, 
+        // or just let them show up (your choice). Keeping raw results for now.
+        setSearchResults(response.results || response.users || []);
+        setError(null);
+      } catch (err) {
+        console.error('Search error:', err);
+        setError('Search failed');
+      } finally {
+        setSearching(false);
+      }
+    }, 500), // 500ms delay
+    []
+  );
+
+  const handleSearchInput = (e) => {
+    const val = e.target.value;
+    setSearchQuery(val);
+
+    if (val.length >= 2) {
+      setSearching(true);
+      debouncedSearch(val);
+    } else {
       setSearchResults([]);
-      return;
-    }
-
-    setSearching(true);
-    setError(null);
-
-    try {
-      const response = await api.get(`/auth/users/search/?q=${encodeURIComponent(query)}`);
-      // Filter out current user from results if necessary, or ensure results are valid
-      setSearchResults(response.results || response.users || []);
-    } catch (err) {
-      setError('Search failed. Please try again.');
-      console.error('Search error:', err);
-    } finally {
       setSearching(false);
     }
-  }, []);
+  };
 
-  // Debounced search
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (searchQuery) {
-        handleSearch(searchQuery);
-      } else {
-        setSearchResults([]);
-      }
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery, handleSearch]);
-
+  // --- SOCIAL ACTIONS ---
   const sendFriendRequest = async (username) => {
     try {
       await api.post('/auth/friends/request/', { username });
-      
+
+      // Optimistic Update
       setSearchResults(prev =>
         prev.map(user =>
           user.username === username
@@ -93,10 +108,9 @@ function FriendSearch() {
             : user
         )
       );
-
       loadFriendRequests();
     } catch (err) {
-      setError(err.message || 'Failed to send friend request');
+      setError(err.response?.data?.message || 'Failed to send friend request');
       setTimeout(() => setError(null), 3000);
     }
   };
@@ -136,21 +150,21 @@ function FriendSearch() {
     }
   };
 
-  // NEW: Challenge friend
   const handleChallengeClick = (friend) => {
     setSelectedFriend(friend);
     setShowChallengeModal(true);
   };
 
-  // NEW: Spectate friend's game
   const handleSpectateClick = (friend) => {
     if (friend.game_id) {
       navigate(`/game/${friend.game_id}`);
     }
   };
 
+  // --- RENDER ---
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full max-w-2xl mx-auto"> {/* Added responsive container constraints */}
+
       {/* Error Alert */}
       {error && (
         <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-4 text-white">
@@ -164,7 +178,7 @@ function FriendSearch() {
         <input
           type="text"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={handleSearchInput} // Changed to new handler
           placeholder="Search for friends by username..."
           className="w-full bg-white/10 border border-white/20 rounded-lg pl-12 pr-4 py-3 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-purple-500"
         />
@@ -177,9 +191,14 @@ function FriendSearch() {
 
       {/* Search Results */}
       {searchResults.length > 0 && (
-        <div className="bg-white/5 backdrop-blur-lg rounded-xl border border-white/10 p-4">
-          <h3 className="text-white font-semibold mb-4">Search Results</h3>
-          <div className="space-y-2">
+        <div className="bg-gray-800/90 backdrop-blur-lg rounded-xl border border-white/10 p-4 shadow-xl z-10 relative">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-white font-semibold">Search Results</h3>
+            <button onClick={() => setSearchResults([])} className="text-gray-400 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
             {searchResults.map((user) => (
               <UserCard
                 key={user.id}
@@ -205,10 +224,10 @@ function FriendSearch() {
             {friendRequests.received.map((request) => (
               <div
                 key={request.id}
-                className="flex items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+                className="flex flex-col sm:flex-row items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors gap-3"
               >
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold">
+                <div className="flex items-center space-x-3 w-full sm:w-auto">
+                  <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold shrink-0">
                     {request.user.username[0].toUpperCase()}
                   </div>
                   <div>
@@ -216,16 +235,16 @@ function FriendSearch() {
                     <p className="text-white/60 text-sm">Rating: {request.user.rating}</p>
                   </div>
                 </div>
-                <div className="flex space-x-2">
+                <div className="flex space-x-2 w-full sm:w-auto justify-end">
                   <button
                     onClick={() => acceptFriendRequest(request.id)}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+                    className="flex-1 sm:flex-none px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm"
                   >
                     Accept
                   </button>
                   <button
                     onClick={() => rejectFriendRequest(request.id)}
-                    className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors"
+                    className="flex-1 sm:flex-none px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors text-sm"
                   >
                     Decline
                   </button>
@@ -252,11 +271,11 @@ function FriendSearch() {
             {friends.map((friend) => (
               <div
                 key={friend.id}
-                className="flex items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+                className="flex items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors group"
               >
                 <div className="flex items-center space-x-3">
                   <div className="relative">
-                    <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold">
+                    <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold shrink-0">
                       {friend.username[0].toUpperCase()}
                     </div>
                     {friend.is_online && (
@@ -265,13 +284,15 @@ function FriendSearch() {
                   </div>
                   <div>
                     <p className="text-white font-medium">{friend.username}</p>
-                    <p className="text-white/60 text-sm">
-                      Rating: {friend.rating}
-                      {friend.in_game && ' • In Game'}
+                    <p className="text-white/60 text-sm flex items-center gap-2">
+                      <span>{friend.rating}</span>
+                      {friend.in_game && (
+                        <span className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">In Game</span>
+                      )}
                     </p>
                   </div>
                 </div>
-                
+
                 {/* Action buttons */}
                 <div className="flex items-center space-x-2">
                   {friend.in_game ? (
@@ -291,10 +312,10 @@ function FriendSearch() {
                       <Swords className="w-4 h-4" />
                     </button>
                   ) : null}
-                  
+
                   <button
                     onClick={() => removeFriend(friend.id)}
-                    className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                    className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
                     title="Remove friend"
                   >
                     <X className="w-5 h-5" />
@@ -306,7 +327,7 @@ function FriendSearch() {
         )}
       </div>
 
-      {/* Challenge Modal */}
+      {/* Challenge Modal (Preserved) */}
       {showChallengeModal && selectedFriend && (
         <ChallengeModal
           friend={selectedFriend}
@@ -317,7 +338,6 @@ function FriendSearch() {
           onSuccess={() => {
             setShowChallengeModal(false);
             setSelectedFriend(null);
-            // Optionally navigate to pending challenges page
           }}
         />
       )}
@@ -325,29 +345,35 @@ function FriendSearch() {
   );
 }
 
+// --- SUB-COMPONENTS (Preserved) ---
+
 function UserCard({ user, onSendRequest, onRemoveFriend }) {
   const renderActionButton = () => {
+    // Handling standard friendship statuses from backend
     switch (user.friendship_status) {
       case 'friend':
+      case 'accepted':
         return (
           <button
             onClick={onRemoveFriend}
             className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors flex items-center space-x-2"
           >
             <UserCheck className="w-4 h-4" />
-            <span>Friends</span>
+            <span className="hidden sm:inline">Friends</span>
           </button>
         );
       case 'request_sent':
+      case 'sent':
         return (
-          <div className="px-4 py-2 bg-white/10 text-white/60 rounded-lg flex items-center space-x-2">
+          <div className="px-4 py-2 bg-white/10 text-white/60 rounded-lg flex items-center space-x-2 cursor-default">
             <Clock className="w-4 h-4" />
-            <span>Pending</span>
+            <span className="hidden sm:inline">Pending</span>
           </div>
         );
       case 'request_received':
+      case 'received':
         return (
-          <div className="px-4 py-2 bg-purple-600/30 text-purple-300 rounded-lg">
+          <div className="px-4 py-2 bg-purple-600/30 text-purple-300 rounded-lg text-sm">
             Sent you a request
           </div>
         );
@@ -358,7 +384,7 @@ function UserCard({ user, onSendRequest, onRemoveFriend }) {
             className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors flex items-center space-x-2"
           >
             <UserPlus className="w-4 h-4" />
-            <span>Add Friend</span>
+            <span className="hidden sm:inline">Add</span>
           </button>
         );
     }
@@ -367,12 +393,12 @@ function UserCard({ user, onSendRequest, onRemoveFriend }) {
   return (
     <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors">
       <div className="flex items-center space-x-3">
-        <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold">
+        <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold shrink-0">
           {user.username[0].toUpperCase()}
         </div>
         <div>
           <p className="text-white font-medium">{user.username}</p>
-          <p className="text-white/60 text-sm">Rating: {user.rating}</p>
+          <p className="text-white/60 text-sm">{user.rating}</p>
         </div>
       </div>
       {renderActionButton()}
@@ -380,7 +406,6 @@ function UserCard({ user, onSendRequest, onRemoveFriend }) {
   );
 }
 
-// NEW: Challenge Modal Component
 function ChallengeModal({ friend, onClose, onSuccess }) {
   const [selectedTimeControl, setSelectedTimeControl] = useState('10+0');
   const [sending, setSending] = useState(false);
@@ -406,18 +431,17 @@ function ChallengeModal({ friend, onClose, onSuccess }) {
         friend_id: friend.id,
         time_control: selectedTimeControl,
       });
-
       onSuccess();
     } catch (err) {
-      setError(err.message || 'Failed to send challenge');
+      setError(err.response?.data?.message || 'Failed to send challenge');
     } finally {
       setSending(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border-2 border-purple-500/50 shadow-2xl p-8 max-w-md w-full mx-4">
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl border-2 border-purple-500/50 shadow-2xl p-6 md:p-8 max-w-md w-full">
         <div className="text-center mb-6">
           <Swords className="w-16 h-16 text-purple-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-white mb-2">
@@ -434,40 +458,38 @@ function ChallengeModal({ friend, onClose, onSuccess }) {
           </div>
         )}
 
-        {/* Time Control Selection */}
         <div className="grid grid-cols-4 gap-2 mb-6">
           {timeControls.map((tc) => (
             <button
               key={tc.value}
               onClick={() => setSelectedTimeControl(tc.value)}
               className={`
-                p-3 rounded-lg border-2 transition-all
+                p-2 rounded-lg border-2 transition-all text-xs sm:text-sm font-semibold
                 ${selectedTimeControl === tc.value
                   ? 'bg-purple-600 border-purple-500 text-white'
                   : 'bg-white/5 border-white/10 text-white/80 hover:border-white/30'
                 }
               `}
             >
-              <div className="text-sm font-semibold">{tc.label}</div>
+              {tc.label}
             </button>
           ))}
         </div>
 
-        {/* Actions */}
         <div className="flex space-x-3">
           <button
             onClick={onClose}
             disabled={sending}
-            className="flex-1 px-6 py-3 rounded-lg font-semibold bg-white/10 hover:bg-white/20 text-white transition-all disabled:opacity-50"
+            className="flex-1 px-4 py-3 rounded-lg font-semibold bg-white/10 hover:bg-white/20 text-white transition-all disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={handleSendChallenge}
             disabled={sending}
-            className="flex-1 px-6 py-3 rounded-lg font-semibold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white transition-all disabled:opacity-50"
+            className="flex-1 px-4 py-3 rounded-lg font-semibold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white transition-all disabled:opacity-50"
           >
-            {sending ? 'Sending...' : 'Send Challenge'}
+            {sending ? 'Sending...' : 'Send'}
           </button>
         </div>
       </div>

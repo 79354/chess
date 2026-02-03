@@ -42,9 +42,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # <--- MOVED TO TOP (Critical for CORS)
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -199,9 +199,13 @@ SIMPLE_JWT = {
 }
 
 # CORS Settings
+# Updated default to include localhost:3000 and 127.0.0.1:3000 for Mac/Frontend compatibility
 CORS_ALLOWED_ORIGINS = [
     origin.strip() 
-    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+    for origin in os.environ.get(
+        'CORS_ALLOWED_ORIGINS', 
+        "http://localhost:5173,http://localhost:3000,http://127.0.0.1:3000"
+    ).split(',')
     if origin.strip()
 ]
 

@@ -12,7 +12,7 @@ function Friends() {
   const [friends, setFriends] = useState([]);
   const [friendRequests, setFriendRequests] = useState([]);
   const [challenges, setChallenges] = useState({ received: [], sent: [] });
-  
+
   // Challenge modal state
   const [showChallengeModal, setShowChallengeModal] = useState(false);
   const [selectedFriend, setSelectedFriend] = useState(null);
@@ -21,7 +21,7 @@ function Friends() {
     fetchFriends();
     fetchFriendRequests();
     fetchChallenges();
-    
+
     // Poll for challenges every 5 seconds
     const interval = setInterval(fetchChallenges, 5000);
     return () => clearInterval(interval);
@@ -46,10 +46,12 @@ function Friends() {
   const fetchFriendRequests = async () => {
     try {
       const response = await api.get('/auth/friends/requests/');
-      setFriendRequests(response.map(r => ({
+      const requests = response.received || [];
+
+      setFriendRequests(requests.map(r => ({
         id: r.id,
-        username: r.from_user.username,
-        rating: r.from_user.rating,
+        username: r.user.username, // Note: backend serializer returns 'user' object inside
+        rating: r.user.rating,
         sentAt: new Date(r.created_at),
       })));
     } catch (error) {
@@ -124,17 +126,17 @@ function Friends() {
       console.error('Failed to reject challenge:', error);
     }
   };
-  
+
   const getLastSeenText = (lastSeen) => {
     const diff = Date.now() - lastSeen.getTime();
     const minutes = Math.floor(diff / 60000);
-    
+
     if (minutes < 1) return 'Just now';
     if (minutes < 60) return `${minutes}m ago`;
-    
+
     const hours = Math.floor(minutes / 60);
     if (hours < 24) return `${hours}h ago`;
-    
+
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
   };
@@ -175,33 +177,30 @@ function Friends() {
       <div className="flex space-x-2 mb-6">
         <button
           onClick={() => setActiveTab('friends')}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-            activeTab === 'friends'
+          className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${activeTab === 'friends'
               ? 'bg-purple-600 text-white'
               : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
-          }`}
+            }`}
         >
           <Users className="w-5 h-5" />
           <span>Friends ({friends.length})</span>
         </button>
         <button
           onClick={() => setActiveTab('requests')}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-            activeTab === 'requests'
+          className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${activeTab === 'requests'
               ? 'bg-purple-600 text-white'
               : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
-          }`}
+            }`}
         >
           <UserPlus className="w-5 h-5" />
           <span>Requests ({friendRequests.length})</span>
         </button>
         <button
           onClick={() => setActiveTab('search')}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-            activeTab === 'search'
+          className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${activeTab === 'search'
               ? 'bg-purple-600 text-white'
               : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
-          }`}
+            }`}
         >
           <Search className="w-5 h-5" />
           <span>Find Friends</span>
@@ -250,13 +249,13 @@ function Friends() {
                     </div>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <button 
+                    <button
                       className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
                       title="Message"
                     >
                       <MessageCircle className="w-5 h-5" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => handleChallengeFriend(friend)}
                       className="p-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white rounded-lg transition-all"
                       title="Challenge to game"

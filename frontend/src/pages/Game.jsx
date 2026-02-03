@@ -53,7 +53,7 @@ function Game() {
   const [drawOffer, setDrawOffer] = useState(null);
   const [showDrawOfferModal, setShowDrawOfferModal] = useState(false);
   const [moveInProgress, setMoveInProgress] = useState(false);
-  
+
   // UI feedback
   const [error, setError] = useState(null);
   const [connectionError, setConnectionError] = useState(null);
@@ -77,15 +77,15 @@ function Game() {
   const suppressScrollTemporarily = useCallback(() => {
     const savedScrollY = window.scrollY;
     preventAutoScrollRef.current = true;
-    
+
     const handler = (e) => {
       if (preventAutoScrollRef.current) {
         window.scrollTo(0, savedScrollY);
       }
     };
-    
+
     window.addEventListener('scroll', handler, { passive: false });
-    
+
     setTimeout(() => {
       preventAutoScrollRef.current = false;
       window.removeEventListener('scroll', handler);
@@ -97,7 +97,7 @@ function Game() {
 
   const handleGameState = useCallback((data) => {
     console.log('🎮 Initializing game state:', data);
-    
+
     // Set players
     setWhitePlayer(data.white_player);
     setBlackPlayer(data.black_player);
@@ -134,7 +134,7 @@ function Game() {
       timestamp: m.timestamp || Date.now(),
       sequence: m.sequence || m.move_number,
     }));
-    
+
     setMoves(serverMoves);
     setCurrentMoveIndex(serverMoves.length - 1);
 
@@ -166,7 +166,7 @@ function Game() {
 
   const handleOpponentMove = useCallback((data) => {
     console.log('♟️ Move received:', data);
-    
+
     const moveData = data.move;
     if (!moveData) return;
 
@@ -175,10 +175,10 @@ function Game() {
       isCapture: moveData.captured,
       isCheck: moveData.is_check
     });
-    
+
     // Clear move-in-progress flag
     setMoveInProgress(false);
-    
+
     // Remove optimistic moves, add confirmed server move
     setMoves(prev => {
       const confirmed = prev.filter(m => !m.optimistic);
@@ -193,18 +193,18 @@ function Game() {
         sequence: moveData.sequence,
       }];
     });
-    
+
     // ✅ ALWAYS load board from server FEN (authoritative)
     if (data.fen || moveData.fen) {
       const newBoard = new Board(data.fen || moveData.fen);
       setBoard(newBoard);
       console.log('📥 Board updated from server FEN, turn:', newBoard.turn);
     }
-    
+
     // Update clocks FROM SERVER
     if (data.white_time !== undefined) setWhiteTime(data.white_time);
     if (data.black_time !== undefined) setBlackTime(data.black_time);
-    
+
     // Update captured pieces
     if (moveData.captured) {
       setCapturedPieces(prev => ({
@@ -212,7 +212,7 @@ function Game() {
         [moveData.color]: [...prev[moveData.color], moveData.captured],
       }));
     }
-    
+
     // Update game state - use board.turn from FEN
     setGameState(prev => ({
       ...prev,
@@ -222,7 +222,7 @@ function Game() {
       lastMove: { from: moveData.from, to: moveData.to },
       winner: moveData.winner || data.winner || prev.winner,
     }));
-    
+
     setCurrentMoveIndex(prev => prev + 1);
   }, []);
 
@@ -234,11 +234,11 @@ function Game() {
   const handleStateSnapshot = useCallback((data) => {
     const newBoard = new Board(data.fen);
     setBoard(newBoard);
-    
+
     setWhiteTime(data.white_time);
     setBlackTime(data.black_time);
     setCurrentMoveIndex(data.move_index);
-    
+
     setGameState(prev => ({
       ...prev,
       turn: newBoard.turn,
@@ -251,7 +251,7 @@ function Game() {
 
   const handleGameEnded = useCallback((data) => {
     console.log('🏁 Game ended:', data);
-    
+
     if (data.status === 'checkmate') {
       playCheckmate();
     }
@@ -290,7 +290,7 @@ function Game() {
     setMoveInProgress(false);
     setError(errorMessage);
     setTimeout(() => setError(null), 5000);
-    
+
     // Reload board from server to fix any desync
     if (send) {
       send({ type: 'join_game' });
@@ -299,7 +299,7 @@ function Game() {
 
   const handleWebSocketMessage = useCallback((data) => {
     console.log('📨 WebSocket message:', data.type);
-    
+
     switch (data.type) {
       case 'game_state':
         handleGameState(data);
@@ -414,15 +414,15 @@ function Game() {
     // ✅ Create optimistic update WITHOUT switching turn
     const tempBoard = board.clone();
     const tempPiece = { ...tempBoard.getPiece(from) };
-    
+
     if (promotion && tempPiece.type === 'pawn') {
       tempPiece.type = promotion;
     }
-    
+
     tempBoard.board[to] = tempPiece;
     delete tempBoard.board[from];
     // ❌ DON'T switch turn - let server do it
-    
+
     setBoard(tempBoard);
 
     // Add optimistic move to history
@@ -436,7 +436,7 @@ function Game() {
       optimistic: true,
       timestamp: Date.now(),
     };
-    
+
     setMoves(prev => [...prev, optimisticMove]);
     setCurrentMoveIndex(prev => prev + 1);
 
@@ -464,25 +464,25 @@ function Game() {
   }, [board, validator, send]);
 
   const handleMove = useCallback((from, to) => {
-    // ✅ Prevent rapid moves
+    // Prevent rapid moves
     if (moveInProgress) {
       console.log('⏳ Wait for previous move to complete');
       return;
     }
 
     if (isSpectator || gameState.status !== 'ongoing') {
-      console.log('🚫 Cannot move - spectator or game not ongoing');
+      console.log('Cannot move - spectator or game not ongoing');
       return;
     }
-    
+
     if (board.turn !== playerColor) {
-      console.log('🚫 Not your turn - Board turn:', board.turn, 'Your color:', playerColor);
+      console.log('Not your turn - Board turn:', board.turn, 'Your color:', playerColor);
       return;
     }
 
     const piece = board.getPiece(from);
     if (!piece || piece.color !== playerColor) {
-      console.log('🚫 Invalid piece selection');
+      console.log('Invalid piece selection');
       return;
     }
 
@@ -490,7 +490,7 @@ function Game() {
     if (piece.type === 'pawn') {
       const toCoord = board.squareToCoordinate(to);
       const promotionRank = piece.color === 'white' ? 7 : 0;
-      
+
       if (toCoord.rank === promotionRank) {
         setPendingMove({ from, to });
         setShowPromotionModal(true);
@@ -560,9 +560,8 @@ function Game() {
     setChatMessageHandler(() => handler);
   }, []);
 
-  // =================================================================
+
   // RENDER
-  // =================================================================
 
   if (!isInitialized) {
     return (
@@ -576,7 +575,7 @@ function Game() {
   }
 
   return (
-    <div className="container mx-auto max-w-7xl h-[calc(100vh-150px)]">
+    <div className="container mx-auto max-w-7xl h-screen overflow-hidden flex flex-col justify-center py-4">
       {connectionError && (
         <div className="fixed top-20 right-6 bg-orange-500/90 text-white px-6 py-3 rounded-lg shadow-lg z-50">
           {connectionError}
@@ -591,8 +590,11 @@ function Game() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr_280px] gap-4 h-full">
-        <div className="space-y-6">
+      {/* Main Grid Layout */}
+      <div className="game-layout-grid grid grid-cols-1 xl:grid-cols-[320px_1fr_280px] gap-4 h-full">
+
+        {/* LEFT COLUMN: Chat & Controls */}
+        <div className="space-y-6 order-2 xl:order-1">
           <div className="h-64">
             <ChatBox
               gameId={gameId}
@@ -631,8 +633,9 @@ function Game() {
           />
         </div>
 
-        <div className="flex items-center justify-center min-h-0 h-full">
-          <div className="w-full h-full max-w-[min(90vh,90vw)] max-h-[min(90vh,90vw)]">
+        {/* MIDDLE COLUMN: The Board (Wrapper Logic Applied Here) */}
+        <div className="chess-board-wrapper order-1 xl:order-2">
+          <div className="chess-board-container">
             <ChessBoard
               gameState={{
                 board: board.board,
@@ -650,7 +653,8 @@ function Game() {
           </div>
         </div>
 
-        <div className="space-y-6">
+        {/* RIGHT COLUMN: History & Player Clock */}
+        <div className="space-y-6 order-3 xl:order-3">
           <GameClock
             initialTime={playerColor === 'white' ? whiteTime : blackTime}
             increment={timeIncrement}
@@ -675,6 +679,7 @@ function Game() {
         </div>
       </div>
 
+      {/* Modals */}
       {showDrawOfferModal && (
         <DrawOfferModal
           isOpen={showDrawOfferModal}
@@ -704,19 +709,19 @@ function Game() {
 function GameEndedModal({ gameState, onClose, onLeave }) {
   const isDraw = gameState.status === 'draw' || gameState.status === 'stalemate';
   const title = isDraw ? 'Game Drawn' : (gameState.winner === 'white' ? 'White Wins' : 'Black Wins');
-  
+
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[100]">
       <div className="bg-slate-900 rounded-2xl border border-white/20 shadow-2xl p-8 max-w-sm w-full mx-4 text-center relative">
         <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-slate-900 p-4 rounded-full border border-white/20">
           <Trophy className={`w-12 h-12 ${isDraw ? 'text-slate-400' : 'text-yellow-400'}`} />
         </div>
-        
+
         <div className="mt-6 mb-8">
           <h2 className="text-3xl font-black text-white mb-1 uppercase tracking-tight">{title}</h2>
           <p className="text-purple-400 font-medium text-sm tracking-widest uppercase">{gameState.termination || gameState.status}</p>
         </div>
-        
+
         <div className="flex flex-col space-y-3">
           <button
             onClick={onClose}

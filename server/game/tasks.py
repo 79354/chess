@@ -6,6 +6,7 @@ from asgiref.sync import async_to_sync
 import redis
 from django.conf import settings
 import json
+import traceback
 
 # Redis client for matchmaking queue
 redis_client = redis.Redis(
@@ -19,11 +20,12 @@ redis_client = redis.Redis(
 @shared_task(bind=True)
 def find_match(self, user_id, time_control, rating, channel_name):
     """
-    Find a match for a player in the queue
-    Runs asynchronously with 30-second timeout
+    Find a match for a player in the queue.
+    Uses Atomic operations to prevent race conditions.
+    Runs asynchronously with 30-second timeout.
     """
     from accounts.models import User
-    from .models import Game, MatchmakingQueue
+    from .models import Game
     
     print(f"🔍 Finding match for user {user_id}, time_control {time_control}, rating {rating}")
     
@@ -34,7 +36,7 @@ def find_match(self, user_id, time_control, rating, channel_name):
     try:
         user = User.objects.get(id=user_id)
         
-        # Check if user is already in a game
+        # 1. Check if user is already in a game
         active_game = Game.objects.filter(
             status__in=['waiting', 'ongoing']
         ).filter(
@@ -48,13 +50,12 @@ def find_match(self, user_id, time_control, rating, channel_name):
             _notify_matchmaking_error(channel_name, "You're already in an active game")
             return None
         
-        # Try to find opponent in queue
-        opponent_data = _find_opponent_in_queue(queue_key, rating, rating_range, user_id)
+        # 2. FIX: Race Condition - Atomic Pop
+        # We try to find and atomically 'claim' an opponent from the queue
+        opponent_data = _find_and_claim_opponent_atomically(queue_key, rating, rating_range, user_id)
         
         if opponent_data:
-            # Match found! Remove opponent from queue
-            redis_client.srem(queue_key, opponent_data['raw'])
-            
+            # Match found and opponent successfully claimed from Redis!
             opponent_id = opponent_data['user_id']
             opponent = User.objects.get(id=opponent_id)
             
@@ -62,13 +63,15 @@ def find_match(self, user_id, time_control, rating, channel_name):
             game = _create_matchmaking_game(user, opponent, time_control)
             
             # Notify both players
-            _notify_match_found(channel_name, game.game_id, 'white')
-            _notify_match_found(opponent_data['channel_name'], game.game_id, 'black')
+            # Using Group send for robustness (as per the Fix)
+            _notify_match_found(f"user_{user.id}", game.game_id, 'white')
+            _notify_match_found(f"user_{opponent.id}", game.game_id, 'black')
             
-            print(f"✅ Match created: {game.game_id}")
+            print(f"Match created: {game.game_id}")
             return game.game_id
         else:
-            # No match found, add to queue with timestamp
+            # 3. No match found, add self to queue
+            # We preserve the JSON format to keep timestamps and rating info available
             queue_entry = json.dumps({
                 'user_id': user_id,
                 'rating': rating,
@@ -91,12 +94,11 @@ def find_match(self, user_id, time_control, rating, channel_name):
             return None
             
     except User.DoesNotExist:
-        print(f"❌ User {user_id} not found")
+        print(f"User {user_id} not found")
         _notify_matchmaking_error(channel_name, "User not found")
         return None
     except Exception as e:
-        print(f"❌ Matchmaking error: {e}")
-        import traceback
+        print(f"Matchmaking error: {e}")
         traceback.print_exc()
         _notify_matchmaking_error(channel_name, str(e))
         return None
@@ -105,12 +107,12 @@ def find_match(self, user_id, time_control, rating, channel_name):
 @shared_task
 def check_timeout(user_id, time_control, channel_name):
     """
-    Check if user is still in queue after 30 seconds
-    Remove them and notify timeout
+    Check if user is still in queue after 30 seconds.
+    Remove them and notify timeout if they are.
     """
     queue_key = f"matchmaking:{time_control}"
     
-    print(f"⏰ Checking timeout for user {user_id}")
+    print(f"Checking timeout for user {user_id}")
     
     # Get all entries in queue
     queue_entries = redis_client.smembers(queue_key)
@@ -122,13 +124,18 @@ def check_timeout(user_id, time_control, channel_name):
                 # Check if entry is older than 30 seconds
                 entry_time = timezone.datetime.fromisoformat(data['timestamp'])
                 if timezone.now() - entry_time > timedelta(seconds=30):
-                    # Timeout! Remove from queue
-                    redis_client.srem(queue_key, entry)
-                    _notify_matchmaking_timeout(channel_name)
-                    print(f"⏰ User {user_id} timed out - removed from queue")
-                    return True
+                    
+                    # ATOMIC FIX: Attempt to remove this specific entry
+                    # If srem returns 0, it means the user was JUST matched by someone else
+                    if redis_client.srem(queue_key, entry):
+                        _notify_matchmaking_timeout(channel_name)
+                        print(f"User {user_id} timed out - removed from queue")
+                        return True
+                    else:
+                        print(f"User {user_id} was matched just before timeout")
+                        return False
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"⚠️ Invalid queue entry: {e}")
+            print(f"Invalid queue entry: {e}")
             continue
     
     return False
@@ -149,10 +156,11 @@ def leave_queue(user_id, time_control, channel_name):
         try:
             data = json.loads(entry)
             if data['user_id'] == user_id:
-                redis_client.srem(queue_key, entry)
-                _notify_queue_left(channel_name)
-                print(f"✅ User {user_id} removed from queue")
-                return True
+                # Atomically remove
+                if redis_client.srem(queue_key, entry):
+                    _notify_queue_left(channel_name)
+                    print(f"User {user_id} removed from queue")
+                    return True
         except (json.JSONDecodeError, KeyError):
             continue
     
@@ -181,28 +189,30 @@ def cleanup_stale_queues():
                 
                 # Remove entries older than 5 minutes
                 if timezone.now() - entry_time > timedelta(minutes=5):
-                    redis_client.srem(queue_key, entry)
-                    cleaned += 1
-                    
-                    # Notify user if possible
-                    if 'channel_name' in data:
-                        _notify_matchmaking_timeout(data['channel_name'])
+                    # Use srem to ensure we don't delete someone currently being matched
+                    if redis_client.srem(queue_key, entry):
+                        cleaned += 1
+                        # Notify user if possible
+                        if 'channel_name' in data:
+                            _notify_matchmaking_timeout(data['channel_name'])
                         
             except (json.JSONDecodeError, KeyError, ValueError):
                 # Invalid entry, remove it
                 redis_client.srem(queue_key, entry)
                 cleaned += 1
     
-    print(f"✅ Cleaned {cleaned} stale queue entries")
+    print(f"Cleaned {cleaned} stale queue entries")
     return cleaned
 
 
-# ============================================
-# HELPER FUNCTIONS
-# ============================================
 
-def _find_opponent_in_queue(queue_key, rating, rating_range, user_id):
-    """Find suitable opponent in queue"""
+# HELPER FUNCTIONS
+
+def _find_and_claim_opponent_atomically(queue_key, rating, rating_range, user_id):
+    """
+    Find suitable opponent in queue and atomically remove them.
+    If removal succeeds, we have 'claimed' the match.
+    """
     queue_entries = redis_client.smembers(queue_key)
     
     for entry in queue_entries:
@@ -217,8 +227,13 @@ def _find_opponent_in_queue(queue_key, rating, rating_range, user_id):
             
             # Check rating range
             if abs(opponent_rating - rating) <= rating_range:
-                data['raw'] = entry  # Store raw entry for deletion
-                return data
+                # ATOMIC CHECK:
+                # We attempt to remove this exact string from Redis.
+                # If srem returns 1 (True), we successfully 'popped' this user from the queue.
+                # If srem returns 0 (False), someone else matched with them in the microsecond between read and remove.
+                if redis_client.srem(queue_key, entry):
+                    data['raw'] = entry  # Keep raw for reference if needed
+                    return data
                 
         except (json.JSONDecodeError, KeyError):
             continue
@@ -253,11 +268,14 @@ def _create_matchmaking_game(white_player, black_player, time_control):
     return game
 
 
-def _notify_match_found(channel_name, game_id, color):
-    """Notify player that match was found"""
+def _notify_match_found(group_name, game_id, color):
+    """
+    Notify player that match was found.
+    Uses group_send (user_{id}) instead of channel_send for better reliability.
+    """
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.send)(
-        channel_name,
+    async_to_sync(channel_layer.group_send)(
+        group_name,
         {
             'type': 'matchmaking.found',
             'game_id': game_id,

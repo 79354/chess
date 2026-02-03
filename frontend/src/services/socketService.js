@@ -26,7 +26,9 @@ function useWebSocket(url, options = {}) {
     if (!mountedRef.current) return;
 
     try {
-      const token = localStorage.getItem('token');
+      // Updated: Check for 'access_token' first, then fallback to 'token'
+      const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+
       const wsUrl = token
         ? `${WS_BASE_URL}${url}?token=${token}`
         : `${WS_BASE_URL}${url}`;
@@ -67,9 +69,12 @@ function useWebSocket(url, options = {}) {
         onClose?.(event);
 
         // Authentication failure → STOP reconnect
+        // Note: With the new middleware, 4001 might come from the Consumer, not middleware.
         if (event.code === 1008 || event.code === 4001) {
           console.error('❌ Authentication failed - stopping reconnection');
           setError('Session expired. Please login again.');
+          // Clear tokens to prevent loop
+          localStorage.removeItem('access_token');
           localStorage.removeItem('token');
           localStorage.removeItem('refresh');
           localStorage.removeItem('user');

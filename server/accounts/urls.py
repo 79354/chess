@@ -21,7 +21,6 @@ urlpatterns = [
     path('me/', views.get_current_user, name='current_user'),
     path('profile/update/', views.update_profile, name='update_profile'),
     path('password/change/', views.change_password, name='change_password'),
-    path('users/<str:username>/', views.get_user_profile, name='user_profile'),
 
     # Friends
     path('friends/', friend_views.get_friends, name='get_friends'),
@@ -31,4 +30,5 @@ urlpatterns = [
     path('friends/reject/', friend_views.reject_friend_request, name='reject_friend_request'),
     path('friends/<int:user_id>/', friend_views.remove_friend, name='remove_friend'),
     path('users/search/', friend_views.search_users, name='search_users'),
+    path('users/<str:username>/', views.get_user_profile, name='user_profile'),
 ]
